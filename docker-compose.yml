@@ -1,0 +1,93 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ./backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      BATRU_BASE_URL: ${BATRU_BASE_URL:-https://batru.gg}
+      BATRU_TIMEOUT_SECONDS: ${BATRU_TIMEOUT_SECONDS:-8}
+      BATRU_MAX_RETRIES: ${BATRU_MAX_RETRIES:-2}
+      BATRU_RETRY_BACKOFF_SECONDS: ${BATRU_RETRY_BACKOFF_SECONDS:-0.5}
+      OPENDOTA_BASE_URL: ${OPENDOTA_BASE_URL:-https://api.opendota.com/api}
+      OPENDOTA_API_KEY: ${OPENDOTA_API_KEY:-}
+      OPENDOTA_TIMEOUT_SECONDS: ${OPENDOTA_TIMEOUT_SECONDS:-10}
+      OPENDOTA_MAX_RETRIES: ${OPENDOTA_MAX_RETRIES:-2}
+      OPENDOTA_RETRY_BACKOFF_SECONDS: ${OPENDOTA_RETRY_BACKOFF_SECONDS:-0.5}
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ./backend
+    command: python -m app.workers.main
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      BATRU_BASE_URL: ${BATRU_BASE_URL:-https://batru.gg}
+      BATRU_TIMEOUT_SECONDS: ${BATRU_TIMEOUT_SECONDS:-8}
+      BATRU_MAX_RETRIES: ${BATRU_MAX_RETRIES:-2}
+      BATRU_RETRY_BACKOFF_SECONDS: ${BATRU_RETRY_BACKOFF_SECONDS:-0.5}
+      OPENDOTA_BASE_URL: ${OPENDOTA_BASE_URL:-https://api.opendota.com/api}
+      OPENDOTA_API_KEY: ${OPENDOTA_API_KEY:-}
+      OPENDOTA_TIMEOUT_SECONDS: ${OPENDOTA_TIMEOUT_SECONDS:-10}
+      OPENDOTA_MAX_RETRIES: ${OPENDOTA_MAX_RETRIES:-2}
+      OPENDOTA_RETRY_BACKOFF_SECONDS: ${OPENDOTA_RETRY_BACKOFF_SECONDS:-0.5}
+      WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-30}
+      WORKER_MAX_DETAILS_PER_CYCLE: ${WORKER_MAX_DETAILS_PER_CYCLE:-10}
+      WORKER_DETAILS_RECHECK_SECONDS: ${WORKER_DETAILS_RECHECK_SECONDS:-3600}
+      WORKER_JOB_STALE_SECONDS: ${WORKER_JOB_STALE_SECONDS:-300}
+      WORKER_JOB_MAX_ATTEMPTS: ${WORKER_JOB_MAX_ATTEMPTS:-3}
+      PREDICTION_MODEL_NAME: ${PREDICTION_MODEL_NAME:-default}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    environment:
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
+      VITE_POLL_INTERVAL_MS: ${VITE_POLL_INTERVAL_MS:-30000}
+    ports:
+      - "5173:5173"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

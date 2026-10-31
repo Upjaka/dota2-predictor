@@ -8,6 +8,10 @@ from app.db.dependencies import get_db_session
 from app.models import Draft
 from app.repositories.matches import MatchRepository
 from app.schemas.matches import (
+    DashboardDraftRead,
+    DashboardGameRead,
+    DashboardMatchRead,
+    DashboardResponse,
     DraftPickRead,
     DraftRead,
     MatchDetail,
@@ -68,6 +72,94 @@ async def list_tournaments(
 ) -> list[TournamentRead]:
     tournaments = await MatchRepository(session).list_tournaments()
     return [TournamentRead(id=league_id, name=name) for league_id, name in tournaments]
+
+
+@router.get("/matches/dashboard", response_model=DashboardResponse)
+async def get_dashboard(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    status: Annotated[
+        Literal["unknown", "scheduled", "live", "completed", "cancelled"] | None,
+        Query(),
+    ] = None,
+    tournament_id: Annotated[str | None, Query(min_length=1, max_length=200, pattern=r"^\S+$")] = None,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    sort_order: Annotated[Literal["asc", "desc"], Query()] = "asc",
+) -> DashboardResponse:
+    (
+        rows,
+        total,
+        tournaments,
+        games_by_match,
+        drafts_by_game,
+        draft_ids_with_predictions,
+        latest_jobs,
+    ) = await MatchRepository(session).get_dashboard_data(
+        status=status,
+        tournament_id=tournament_id,
+        offset=offset,
+        limit=limit,
+        sort_order=sort_order,
+    )
+
+    items = []
+    for match, start_time in rows:
+        current_game = games_by_match.get(match.id)
+        draft = drafts_by_game.get(current_game.id) if current_game else None
+        serialized_game = _serialize_game(current_game) if current_game else None
+        job = latest_jobs.get(draft.id) if draft else None
+        items.append(
+            DashboardMatchRead(
+                id=match.id,
+                provider=match.provider,
+                external_match_id=match.external_match_id,
+                status=match.status,
+                league_name=match.league_name,
+                format=match.format,
+                received_at=match.received_at,
+                start_time=start_time,
+                team_one=match.team_one,
+                team_two=match.team_two,
+                current_game=(
+                    DashboardGameRead(
+                        id=serialized_game.id,
+                        game_number=serialized_game.game_number,
+                        started_at=serialized_game.started_at,
+                        status=serialized_game.status,
+                        radiant_score=serialized_game.radiant_score,
+                        dire_score=serialized_game.dire_score,
+                        winner_side=serialized_game.winner_side,
+                        winner_team_id=serialized_game.winner_team_id,
+                        winner_team_name=serialized_game.winner_team_name,
+                        details_error=serialized_game.details_error,
+                    )
+                    if serialized_game
+                    else None
+                ),
+                draft=(
+                    DashboardDraftRead(
+                        version=draft.version,
+                        pick_count=len(draft.picks),
+                        is_complete=is_draft_complete(draft.picks),
+                        pick_order_is_chronological=draft.pick_order_is_chronological,
+                    )
+                    if draft
+                    else None
+                ),
+                has_prediction=bool(
+                    draft and draft.id in draft_ids_with_predictions
+                ),
+                prediction_job_status=job.status if job else None,
+            )
+        )
+
+    return DashboardResponse(
+        items=items,
+        total=total,
+        offset=offset,
+        limit=limit,
+        tournaments=[TournamentRead(id=league_id, name=name) for league_id, name in tournaments],
+    )
 
 
 @router.get("/matches/{match_id}", response_model=MatchDetail)

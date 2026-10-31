@@ -5,9 +5,7 @@ import DashboardPage from "./DashboardPage.jsx";
 
 const { api } = vi.hoisted(() => ({
   api: {
-    getMatches: vi.fn(),
-    getMatchOverview: vi.fn(),
-    getTournaments: vi.fn(),
+    getDashboard: vi.fn(),
   },
 }));
 
@@ -35,18 +33,34 @@ function renderPage() {
 describe("DashboardPage match filters", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    api.getMatches.mockImplementation(
+    api.getDashboard.mockImplementation(
       async ({ offset = 0, limit = 20 } = {}) => ({
-        items: [],
+        matches: [],
         total: 0,
         offset,
         limit,
+        tournaments: [{ id: "league-42", name: "Autumn Cup" }],
       }),
     );
-    api.getMatchOverview.mockImplementation(async (item) => item);
-    api.getTournaments.mockResolvedValue([
-      { id: "league-42", name: "Autumn Cup" },
-    ]);
+  });
+
+  it("loads all 20 cards through one dashboard API call", async () => {
+    api.getDashboard.mockResolvedValue({
+      matches: Array.from({ length: 20 }, (_, index) => ({
+        ...match,
+        id: `series-${index}`,
+        team_one: { name: `Team ${index}` },
+      })),
+      total: 20,
+      offset: 0,
+      limit: 20,
+      tournaments: [{ id: "league-42", name: "Autumn Cup" }],
+    });
+
+    renderPage();
+
+    expect(await screen.findByText("Team 19")).toBeInTheDocument();
+    expect(api.getDashboard).toHaveBeenCalledTimes(1);
   });
 
   it("renders supported statuses and real tournament options", async () => {
@@ -64,12 +78,13 @@ describe("DashboardPage match filters", () => {
   });
 
   it("sends both filters together and resets to the first page when they change", async () => {
-    api.getMatches.mockImplementation(
+    api.getDashboard.mockImplementation(
       async ({ offset = 0, limit = 20 } = {}) => ({
-        items: [match],
+        matches: [match],
         total: 45,
         offset,
         limit,
+        tournaments: [{ id: "league-42", name: "Autumn Cup" }],
       }),
     );
     renderPage();
@@ -82,7 +97,7 @@ describe("DashboardPage match filters", () => {
     fireEvent.change(tournamentFilter, { target: { value: "league-42" } });
 
     await waitFor(() => {
-      expect(api.getMatches).toHaveBeenLastCalledWith(
+      expect(api.getDashboard).toHaveBeenLastCalledWith(
         {
           status: "completed",
           tournamentId: "league-42",
@@ -96,7 +111,7 @@ describe("DashboardPage match filters", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Далее" }));
     await waitFor(() => {
-      expect(api.getMatches).toHaveBeenLastCalledWith(
+      expect(api.getDashboard).toHaveBeenLastCalledWith(
         expect.objectContaining({ offset: 20 }),
         expect.any(Object),
       );
@@ -104,7 +119,7 @@ describe("DashboardPage match filters", () => {
 
     fireEvent.change(statusFilter, { target: { value: "unknown" } });
     await waitFor(() => {
-      expect(api.getMatches).toHaveBeenLastCalledWith(
+      expect(api.getDashboard).toHaveBeenLastCalledWith(
         expect.objectContaining({
           status: "unknown",
           tournamentId: "league-42",
@@ -122,7 +137,7 @@ describe("DashboardPage match filters", () => {
     });
 
     await waitFor(() => {
-      expect(api.getMatches).toHaveBeenLastCalledWith(
+      expect(api.getDashboard).toHaveBeenLastCalledWith(
         expect.objectContaining({ status: "", tournamentId: "league-42", offset: 0 }),
         expect.any(Object),
       );
@@ -130,9 +145,9 @@ describe("DashboardPage match filters", () => {
   });
 
   it("renders a live match in the default feed and applies the live filter", async () => {
-    api.getMatches.mockImplementation(
+    api.getDashboard.mockImplementation(
       async ({ offset = 0, limit = 20 } = {}) => ({
-        items: [
+        matches: [
           {
             ...match,
             status: "live",
@@ -143,6 +158,7 @@ describe("DashboardPage match filters", () => {
         total: 1,
         offset,
         limit,
+        tournaments: [{ id: "league-42", name: "Autumn Cup" }],
       }),
     );
     renderPage();
@@ -150,7 +166,7 @@ describe("DashboardPage match filters", () => {
     expect(await screen.findByText("Team Yandex")).toBeInTheDocument();
     expect(screen.getByText("Astra Invicta")).toBeInTheDocument();
     expect(screen.getAllByText("Идёт")).toHaveLength(2);
-    expect(api.getMatches).toHaveBeenLastCalledWith(
+    expect(api.getDashboard).toHaveBeenLastCalledWith(
       expect.objectContaining({ status: "" }),
       expect.any(Object),
     );
@@ -159,7 +175,7 @@ describe("DashboardPage match filters", () => {
       target: { value: "live" },
     });
     await waitFor(() => {
-      expect(api.getMatches).toHaveBeenLastCalledWith(
+      expect(api.getDashboard).toHaveBeenLastCalledWith(
         expect.objectContaining({ status: "live", offset: 0 }),
         expect.any(Object),
       );
@@ -177,7 +193,7 @@ describe("DashboardPage match filters", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Сбросить фильтры" }));
 
     await waitFor(() => {
-      expect(api.getMatches).toHaveBeenLastCalledWith(
+      expect(api.getDashboard).toHaveBeenLastCalledWith(
         {
           status: "",
           tournamentId: "",
@@ -198,25 +214,30 @@ describe("DashboardPage match filters", () => {
     expect(await screen.findByText("Матчи не найдены")).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 
-    api.getMatches.mockRejectedValue(new Error("API недоступен"));
+    api.getDashboard.mockRejectedValue(new Error("API недоступен"));
     fireEvent.click(screen.getByRole("button", { name: "Обновить" }));
     expect(await screen.findByText("API недоступен")).toBeInTheDocument();
     expect(screen.getByRole("alert")).toBeInTheDocument();
   });
 
   it("reports tournament loading errors and allows retry", async () => {
-    api.getTournaments
+    api.getDashboard
       .mockRejectedValueOnce(new Error("Турниры недоступны"))
-      .mockResolvedValueOnce([{ id: "league-42", name: "Autumn Cup" }]);
+      .mockResolvedValueOnce({
+        matches: [],
+        total: 0,
+        offset: 0,
+        limit: 20,
+        tournaments: [{ id: "league-42", name: "Autumn Cup" }],
+      });
     renderPage();
 
-    expect(await screen.findByText(/Не удалось загрузить список турниров/)).toBeInTheDocument();
-    expect(screen.getByRole("alert")).toHaveTextContent("Турниры недоступны");
-    fireEvent.click(screen.getByRole("button", { name: "Повторить" }));
+    expect(await screen.findByText("Турниры недоступны")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Обновить" }));
     expect(await screen.findByRole("option", { name: "Autumn Cup" })).toHaveValue(
       "league-42",
     );
-    expect(screen.queryByText(/Не удалось загрузить список турниров/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Турниры недоступны")).not.toBeInTheDocument();
   });
 
   it("keeps selected filters during polling refreshes", async () => {
@@ -236,11 +257,11 @@ describe("DashboardPage match filters", () => {
         await Promise.resolve();
       });
 
-      expect(api.getMatches).toHaveBeenLastCalledWith(
+      expect(api.getDashboard).toHaveBeenLastCalledWith(
         expect.objectContaining({ status: "completed", tournamentId: "" }),
         expect.any(Object),
       );
-      expect(api.getTournaments).toHaveBeenCalledTimes(2);
+      expect(api.getDashboard).toHaveBeenCalledTimes(3);
     } finally {
       vi.useRealTimers();
     }

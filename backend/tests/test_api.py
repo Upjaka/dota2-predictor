@@ -366,3 +366,154 @@ async def test_match_list_does_not_report_query_errors_as_database_unavailable(
         "message": "A database error occurred.",
     }
     assert "relation matches does not exist" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_dashboard_returns_compact_current_map_draft_and_prediction_state(
+    api_client, monkeypatch
+):
+    team_one = Team(
+        id=uuid4(), provider="opendota", external_team_id="team-1", name="Radiant"
+    )
+    team_two = Team(
+        id=uuid4(), provider="opendota", external_team_id="team-2", name="Dire"
+    )
+    match_id = uuid4()
+    game_id = uuid4()
+    draft_id = uuid4()
+    match = Match(
+        id=match_id,
+        provider="opendota",
+        external_match_id="series-1",
+        team_one=team_one,
+        team_two=team_two,
+        status="live",
+        league_name="Autumn Cup",
+        league_id="42",
+        format="BO3",
+        received_at=datetime(2026, 10, 28, tzinfo=timezone.utc),
+    )
+    match_without_draft = Match(
+        id=uuid4(),
+        provider="opendota",
+        external_match_id="series-2",
+        team_one=team_one,
+        team_two=team_two,
+        status="live",
+        league_name="Autumn Cup",
+        league_id="42",
+        format="BO3",
+        received_at=datetime(2026, 10, 28, tzinfo=timezone.utc),
+    )
+    match_without_game = Match(
+        id=uuid4(),
+        provider="opendota",
+        external_match_id="series-3",
+        team_one=team_one,
+        team_two=team_two,
+        status="scheduled",
+        league_name="Autumn Cup",
+        league_id="42",
+        format="BO3",
+        received_at=datetime(2026, 10, 28, tzinfo=timezone.utc),
+    )
+    game = MatchGame(
+        id=game_id,
+        match_id=match_id,
+        game_number=2,
+        provider="opendota",
+        external_game_id="map-2",
+        status="completed",
+        radiant_won=True,
+        radiant_score=30,
+        dire_score=20,
+        radiant_team_id=team_one.id,
+        dire_team_id=team_two.id,
+        radiant_team=team_one,
+        dire_team=team_two,
+    )
+    game_without_draft = MatchGame(
+        id=uuid4(),
+        match_id=match_without_draft.id,
+        game_number=1,
+        provider="opendota",
+        external_game_id="map-without-draft",
+        status="live",
+        radiant_team_id=team_one.id,
+        dire_team_id=team_two.id,
+        radiant_team=team_one,
+        dire_team=team_two,
+    )
+    picks = [
+        SimpleNamespace(
+            hero_id=uuid4(),
+            side="radiant" if index < 5 else "dire",
+            hero=SimpleNamespace(
+                provider="opendota", external_hero_id=f"hero-{index}"
+            ),
+        )
+        for index in range(10)
+    ]
+    draft = SimpleNamespace(
+        id=draft_id,
+        match_game_id=game_id,
+        version=3,
+        pick_order_is_chronological=False,
+        picks=picks,
+    )
+    job = SimpleNamespace(draft_id=draft_id, status="succeeded")
+    received = {}
+
+    async def get_dashboard_data(_repository, **kwargs):
+        received.update(kwargs)
+        return (
+            [
+                (match, datetime(2026, 10, 28, tzinfo=timezone.utc)),
+                (match_without_draft, datetime(2026, 10, 28, tzinfo=timezone.utc)),
+                (match_without_game, None),
+            ],
+            3,
+            [("42", "Autumn Cup")],
+            {match_id: game, match_without_draft.id: game_without_draft},
+            {game_id: draft},
+            {draft_id},
+            {draft_id: job},
+        )
+
+    monkeypatch.setattr(MatchRepository, "get_dashboard_data", get_dashboard_data)
+    response = await api_client.get(
+        "/api/v1/matches/dashboard?status=live&tournament_id=42&offset=10&limit=5&sort_order=desc"
+    )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["total"] == 3
+    assert result["offset"] == 10
+    assert result["limit"] == 5
+    assert result["tournaments"] == [{"id": "42", "name": "Autumn Cup"}]
+    assert len(result["items"]) == 3
+    item = result["items"][0]
+    assert item["current_game"]["id"] == str(game_id)
+    assert item["current_game"]["winner_side"] == "radiant"
+    assert item["current_game"]["winner_team_name"] == "Radiant"
+    assert item["draft"] == {
+        "version": 3,
+        "pick_count": 10,
+        "is_complete": True,
+        "pick_order_is_chronological": False,
+    }
+    assert item["has_prediction"] is True
+    assert item["prediction_job_status"] == "succeeded"
+    assert result["items"][1]["current_game"] is not None
+    assert result["items"][1]["draft"] is None
+    assert result["items"][1]["has_prediction"] is False
+    assert result["items"][1]["prediction_job_status"] is None
+    assert result["items"][2]["current_game"] is None
+    assert result["items"][2]["draft"] is None
+    assert received == {
+        "status": "live",
+        "tournament_id": "42",
+        "offset": 10,
+        "limit": 5,
+        "sort_order": "desc",
+    }

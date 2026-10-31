@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { api, POLL_INTERVAL_MS } from "../api/index.js";
 import EmptyState from "../components/EmptyState.jsx";
 import ErrorState from "../components/ErrorState.jsx";
@@ -15,21 +15,13 @@ export default function DashboardPage() {
   const [tournamentId, setTournamentId] = useState("");
   const [sortOrder, setSortOrder] = useState("desc");
   const [offset, setOffset] = useState(0);
-  const [tournaments, setTournaments] = useState([]);
-  const [tournamentsLoading, setTournamentsLoading] = useState(true);
-  const [tournamentsError, setTournamentsError] = useState(null);
   const limit = 20;
   const loadMatches = useCallback(
-    async (signal) => {
-      const result = await api.getMatches(
+    (signal) =>
+      api.getDashboard(
         { status, tournamentId, sortOrder, offset, limit },
         { signal },
-      );
-      const matches = await Promise.all(
-        result.items.map((match) => api.getMatchOverview(match, { signal })),
-      );
-      return { matches, total: result.total, offset: result.offset, limit: result.limit };
-    },
+      ),
     [status, tournamentId, sortOrder, offset, limit],
   );
   const { data, loading, refreshing, error, lastUpdated, refreshNow } = usePolling(
@@ -37,33 +29,10 @@ export default function DashboardPage() {
     POLL_INTERVAL_MS,
   );
   const matches = data?.matches || [];
+  const tournaments = data?.tournaments || [];
+  const tournamentsLoading = loading && data === null;
   const total = data?.total || 0;
   const filtersActive = Boolean(status || tournamentId);
-
-  const loadTournaments = useCallback(async (signal) => {
-    try {
-      const availableTournaments = await api.getTournaments({ signal });
-      setTournaments(availableTournaments);
-      setTournamentsError(null);
-    } catch (error) {
-      if (error.name !== "AbortError") setTournamentsError(error.message);
-    } finally {
-      if (!signal.aborted) setTournamentsLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    void loadTournaments(controller.signal);
-    const intervalId = window.setInterval(
-      () => void loadTournaments(controller.signal),
-      POLL_INTERVAL_MS,
-    );
-    return () => {
-      window.clearInterval(intervalId);
-      controller.abort();
-    };
-  }, [loadTournaments]);
 
   function updateStatus(value) {
     setStatus(value);
@@ -139,7 +108,7 @@ export default function DashboardPage() {
             <select
               value={tournamentId}
               onChange={(event) => updateTournament(event.target.value)}
-              disabled={tournamentsLoading || (!tournaments.length && Boolean(tournamentsError))}
+              disabled={tournamentsLoading}
             >
               <option value="">Все турниры</option>
               {tournaments.map((tournament) => (
@@ -172,19 +141,6 @@ export default function DashboardPage() {
             </button>
           ) : null}
         </div>
-
-        {tournamentsError ? (
-          <div className="refresh-warning" role="alert">
-            Не удалось загрузить список турниров: {tournamentsError}.{" "}
-            <button
-              className="inline-retry"
-              type="button"
-              onClick={() => void loadTournaments(new AbortController().signal)}
-            >
-              Повторить
-            </button>
-          </div>
-        ) : null}
 
         {loading ? (
           <LoadingState label="Загружаем профессиональные серии..." />

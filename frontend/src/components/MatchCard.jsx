@@ -35,10 +35,11 @@ function draftStatus(overview) {
   if (overview.detailsUnavailable) return "Данные драфта недоступны";
   if (!overview.draft) return "Драфт пока не получен";
   if (overview.draft.is_complete) return "Драфт завершён";
+  const pickCount = overview.draft.pick_count ?? overview.draft.picks?.length ?? 0;
   if (overview.draft.pick_order_is_chronological === false) {
-    return `Составы: ${overview.draft.picks.length} / 10 героев · порядок пиков неизвестен`;
+    return `Составы: ${pickCount} / 10 героев · порядок пиков неизвестен`;
   }
-  return `${overview.draft.picks.length} пиков · драфт неполный`;
+  return `${pickCount} пиков · драфт неполный`;
 }
 
 export default function MatchCard({ match }) {

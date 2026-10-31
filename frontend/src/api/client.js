@@ -77,6 +77,52 @@ export async function getMatches(
   return { ...result, items: result.items };
 }
 
+export async function getDashboard(
+  {
+    status = "",
+    tournamentId = "",
+    sortOrder = "desc",
+    offset = 0,
+    limit = 20,
+  } = {},
+  { signal } = {},
+) {
+  const params = new URLSearchParams({
+    offset: String(offset),
+    limit: String(limit),
+    sort_order: sortOrder,
+  });
+  if (status) params.set("status", status);
+  if (tournamentId) params.set("tournament_id", tournamentId);
+
+  const result = await request(`/api/v1/matches/dashboard?${params}`, { signal });
+  if (
+    !result ||
+    !Array.isArray(result.items) ||
+    !Array.isArray(result.tournaments)
+  ) {
+    throw new Error("Backend вернул некорректные данные Dashboard.");
+  }
+
+  return {
+    ...result,
+    matches: result.items.map((item) => {
+      const predictionJob = item.prediction_job_status
+        ? { status: item.prediction_job_status }
+        : null;
+      return {
+        ...item,
+        currentGame: item.current_game,
+        forecastState: forecastState(
+          item.draft,
+          item.has_prediction ? {} : null,
+          predictionJob,
+        ),
+      };
+    }),
+  };
+}
+
 export async function getTournaments({ signal } = {}) {
   const result = await request("/api/v1/matches/tournaments", { signal });
   if (
@@ -152,15 +198,6 @@ export async function getGamePredictionJobs(gameId, { signal } = {}) {
   return { game_id: gameId, items: result.items };
 }
 
-function latestGame(games) {
-  return [...games].sort((a, b) => {
-    const timeDifference =
-      new Date(b.started_at || 0).getTime() -
-      new Date(a.started_at || 0).getTime();
-    return timeDifference || b.game_number - a.game_number;
-  })[0] || null;
-}
-
 export function latestForDraft(items, draft) {
   if (!draft) return null;
   return (
@@ -176,91 +213,12 @@ export function latestForDraft(items, draft) {
   );
 }
 
-function forecastState(
-  draft,
-  prediction,
-  job,
-  requestFailed = false,
-) {
+function forecastState(draft, prediction, job) {
   if (prediction) return "ready";
   if (job?.status === "failed") return "temporarily_unavailable";
   if (job?.status === "queued" || job?.status === "running") return "calculating";
-  if (requestFailed) return "temporarily_unavailable";
   if (job && job.status !== "succeeded") return "unknown";
   if (draft?.is_complete) return "no_prediction";
   if (draft) return "draft_forming";
   return "draft_forming";
-}
-
-export async function getMatchOverview(match, { signal } = {}) {
-  try {
-    const details = await getMatch(match.id, { signal });
-    const currentGame =
-      details.games.find((game) => game.status === "live") ||
-      latestGame(details.games);
-    if (!currentGame) {
-      return {
-        ...match,
-        ...details,
-        currentGame: null,
-        draft: null,
-        prediction: null,
-        predictionJob: null,
-        draftState: "forming",
-        forecastState: "draft_forming",
-      };
-    }
-
-    const [draftResult, predictionsResult, jobsResult] = await Promise.allSettled([
-      getGameDraft(currentGame.id, { signal }),
-      getGamePredictions(currentGame.id, { signal }),
-      getGamePredictionJobs(currentGame.id, { signal }),
-    ]);
-    const draft = draftResult.status === "fulfilled" ? draftResult.value : null;
-    const predictions =
-      predictionsResult.status === "fulfilled" ? predictionsResult.value.items : [];
-    const jobs = jobsResult.status === "fulfilled" ? jobsResult.value.items : [];
-    const prediction = latestForDraft(predictions, draft);
-    const predictionJob = latestForDraft(jobs, draft);
-    const failed =
-      draftResult.status === "rejected" ||
-      predictionsResult.status === "rejected" ||
-      jobsResult.status === "rejected";
-    const detailsError = [draftResult, predictionsResult, jobsResult]
-      .filter((result) => result.status === "rejected")
-      .map((result) => result.reason.message)
-      .join(" ");
-
-    return {
-      ...match,
-      ...details,
-      currentGame,
-      draft,
-      prediction,
-      predictionJob,
-      draftState: draft?.is_complete ? "completed" : "forming",
-      forecastState: forecastState(
-        draft,
-        prediction,
-        predictionJob,
-        failed,
-      ),
-      detailsUnavailable:
-        draftResult.status === "rejected" || predictionsResult.status === "rejected",
-      detailsError: detailsError || null,
-    };
-  } catch (error) {
-    if (error.name === "AbortError") throw error;
-    return {
-      ...match,
-      currentGame: null,
-      draft: null,
-      prediction: null,
-      predictionJob: null,
-      draftState: "unavailable",
-      forecastState: "temporarily_unavailable",
-      detailsUnavailable: true,
-      detailsError: error.message,
-    };
-  }
 }

@@ -67,6 +67,41 @@ class TournamentRead(BaseModel):
     name: str
 
 
+class DashboardDraftRead(BaseModel):
+    version: int
+    pick_count: int
+    is_complete: bool
+    pick_order_is_chronological: bool
+
+
+class DashboardGameRead(BaseModel):
+    id: UUID
+    game_number: int
+    started_at: datetime | None
+    status: str
+    radiant_score: int | None
+    dire_score: int | None
+    winner_side: Literal["radiant", "dire", "unknown"] = "unknown"
+    winner_team_id: UUID | None = None
+    winner_team_name: str | None = None
+    details_error: str | None
+
+
+class DashboardMatchRead(MatchSummary):
+    current_game: DashboardGameRead | None
+    draft: DashboardDraftRead | None
+    has_prediction: bool
+    prediction_job_status: Literal["queued", "running", "succeeded", "failed"] | None
+
+
+class DashboardResponse(BaseModel):
+    items: list[DashboardMatchRead]
+    total: int
+    offset: int
+    limit: int
+    tournaments: list[TournamentRead]
+
+
 class DraftPickRead(BaseModel):
     id: UUID
     hero_id: UUID

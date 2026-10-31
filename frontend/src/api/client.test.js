@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getGameDraft, getMatches, getTournaments } from "./client.js";
+import { getDashboard, getGameDraft, getMatches, getTournaments } from "./client.js";
 
 function response(status, body) {
   const text = JSON.stringify(body);
@@ -16,6 +16,49 @@ afterEach(() => {
 });
 
 describe("API client", () => {
+  it("loads a 20-match dashboard page in one HTTP request", async () => {
+    const items = Array.from({ length: 20 }, (_, index) => ({
+      id: `series-${index}`,
+      status: "live",
+      current_game: {
+        id: `game-${index}`,
+        game_number: 1,
+        status: "live",
+        details_error: null,
+      },
+      draft: {
+        version: 2,
+        pick_count: 10,
+        is_complete: true,
+        pick_order_is_chronological: true,
+      },
+      has_prediction: index === 0,
+      prediction_job_status: index === 1 ? "running" : null,
+    }));
+    const fetch = vi.fn().mockResolvedValue(
+      response(200, {
+        items,
+        total: 20,
+        offset: 0,
+        limit: 20,
+        tournaments: [{ id: "42", name: "Autumn Cup" }],
+      }),
+    );
+    vi.stubGlobal("fetch", fetch);
+
+    const result = await getDashboard({ status: "live", limit: 20 });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(new URL(fetch.mock.calls[0][0]).pathname).toBe(
+      "/api/v1/matches/dashboard",
+    );
+    expect(result.matches).toHaveLength(20);
+    expect(result.matches[0].currentGame.id).toBe("game-0");
+    expect(result.matches[0].forecastState).toBe("ready");
+    expect(result.matches[1].forecastState).toBe("calculating");
+    expect(result.tournaments).toEqual([{ id: "42", name: "Autumn Cup" }]);
+  });
+
   it("requests the documented match-list contract and returns empty items", async () => {
     const fetch = vi.fn().mockResolvedValue(
       response(200, { items: [], total: 0, offset: 0, limit: 20 }),

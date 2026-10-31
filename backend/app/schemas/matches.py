@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class TeamRead(BaseModel):
@@ -130,6 +130,8 @@ class PredictionRead(BaseModel):
     draft_id: UUID
     draft_version: int
     model_name: str
+    radiant_roles: list[int] | None = None
+    dire_roles: list[int] | None = None
     radiant_probability: Decimal
     dire_probability: Decimal
     calculated_at: datetime
@@ -138,6 +140,19 @@ class PredictionRead(BaseModel):
 class PredictionListResponse(BaseModel):
     game_id: UUID
     items: list[PredictionRead]
+
+
+class PredictionRoleAssignment(BaseModel):
+    pick_id: UUID
+    position: Literal["pos_1", "pos_2", "pos_3", "pos_4", "pos_5"]
+
+
+class RoleAwarePredictionRequest(BaseModel):
+    assignments: list[PredictionRoleAssignment] = Field(min_length=10, max_length=10)
+
+
+class RoleAwarePredictionRead(PredictionRead):
+    pass
 
 
 class PredictionJobRead(BaseModel):

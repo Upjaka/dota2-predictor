@@ -25,6 +25,23 @@ describe("WinProbability", () => {
       "href",
       "https://batru.gg?utm_source=draftwatch",
     );
+    expect(screen.getByRole("heading", { name: "Вероятность победы по пику" })).toBeInTheDocument();
+    expect(screen.getByText("ОБЫЧНЫЙ ПРОГНОЗ · ТОЛЬКО ПИК")).toBeInTheDocument();
+  });
+
+  it("labels the role-aware forecast separately from the standard pick model", () => {
+    render(
+      <WinProbability
+        prediction={{ radiant_probability: "0.6", dire_probability: "0.4", model_name: "batru_plus" }}
+        variant="role-aware"
+        status="ready"
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "Вероятность победы с учётом ролей" })).toBeInTheDocument();
+    expect(screen.getByText("ПРОГНОЗ С УЧЁТОМ РОЛЕЙ")).toBeInTheDocument();
+    expect(screen.getByText("Batru Plus (с учётом ролей)")).toBeInTheDocument();
+    expect(document.querySelector(".forecast-panel--role-aware")).toBeInTheDocument();
   });
 
   it("shows queued calculation attempts without implying a prediction exists", () => {

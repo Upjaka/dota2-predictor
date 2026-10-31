@@ -46,6 +46,29 @@ async def test_prediction_request_uses_batru_contract_and_normalizes_percentages
 
 
 @pytest.mark.asyncio
+async def test_role_aware_request_sends_role_arrays_aligned_with_heroes():
+    def handler(request):
+        assert json.loads(request.read()) == {
+            "radiant": ["axe", "bane", "chen", "drow", "earthshaker"],
+            "dire": ["abaddon", "alchemist", "ancient_apparition", "antimage", "arc_warden"],
+            "radiant_roles": [1, 2, 3, 4, 5],
+            "dire_roles": [5, 4, 3, 2, 1],
+        }
+        return httpx.Response(200, json={"radiant_win_rate": 62.5, "dire_win_rate": 37.5})
+
+    draft = Draft(
+        radiant_heroes=sample_draft().radiant_heroes,
+        dire_heroes=sample_draft().dire_heroes,
+        radiant_roles=(1, 2, 3, 4, 5),
+        dire_roles=(5, 4, 3, 2, 1),
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        result = await BatruClient(http_client=http).predict_draft(draft)
+
+    assert str(result.radiant_probability) == "0.625"
+
+
+@pytest.mark.asyncio
 async def test_rate_limit_is_reported_as_retryable_with_retry_after():
     def handler(_request):
         return httpx.Response(429, headers={"Retry-After": "3"})

@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useLocation, useParams, useSearchParams } from "react-router-dom";
 import { api, latestForDraft, POLL_INTERVAL_MS } from "../api/index.js";
 import EmptyState from "../components/EmptyState.jsx";
@@ -45,7 +45,24 @@ function statusLabel(status) {
   return labels[status] || labels.unknown;
 }
 
+function predictionMatchesRoles(prediction, picks, selectedRoles) {
+  if (!prediction || !picks.length) return false;
+  const ordered = [...picks].sort((a, b) => a.pick_order - b.pick_order);
+  const roleNumbers = (side) =>
+    ordered
+      .filter((pick) => pick.side === side)
+      .map((pick) => Number(selectedRoles[pick.id]?.slice(-1)));
+  return (
+    JSON.stringify(roleNumbers("radiant")) === JSON.stringify(prediction.radiant_roles) &&
+    JSON.stringify(roleNumbers("dire")) === JSON.stringify(prediction.dire_roles)
+  );
+}
+
 export default function GameDetailsPage() {
+  const [selectedRoles, setSelectedRoles] = useState({});
+  const [submittedRolePrediction, setSubmittedRolePrediction] = useState(null);
+  const [rolePredictionError, setRolePredictionError] = useState(null);
+  const [rolePredictionLoading, setRolePredictionLoading] = useState(false);
   const { gameId } = useParams();
   const location = useLocation();
   const [searchParams] = useSearchParams();
@@ -80,6 +97,10 @@ export default function GameDetailsPage() {
         predictionsResult.status === "fulfilled" ? predictionsResult.value.items : [];
       const jobs = jobsResult.status === "fulfilled" ? jobsResult.value.items : [];
       const prediction = latestForDraft(predictions, draft);
+      const rolePrediction = latestForDraft(
+        predictions.filter((item) => item.model_name === "batru_plus"),
+        draft,
+      );
       const predictionJob = latestForDraft(jobs, draft);
       const requestsFailed =
         draftResult.status === "rejected" ||
@@ -91,6 +112,7 @@ export default function GameDetailsPage() {
         match,
         draft,
         prediction,
+        rolePrediction,
         predictionJob,
         draftError: draftResult.status === "rejected" ? draftResult.reason.message : null,
         predictionStatus: statusFor(
@@ -107,6 +129,66 @@ export default function GameDetailsPage() {
     loadGame,
     POLL_INTERVAL_MS,
   );
+  const loadedDraft = data?.draft;
+  const loadedPicks = loadedDraft?.picks || [];
+  const savedRolePrediction = data?.rolePrediction;
+  const allRolesSelected = loadedPicks.length === 10 && loadedPicks.every((pick) => selectedRoles[pick.id]);
+  const rolePrediction = submittedRolePrediction?.draft_id === loadedDraft?.id
+    ? submittedRolePrediction
+    : predictionMatchesRoles(savedRolePrediction, loadedPicks, selectedRoles)
+      ? savedRolePrediction
+      : null;
+
+  useEffect(() => {
+    setSelectedRoles({});
+    setSubmittedRolePrediction(null);
+    setRolePredictionError(null);
+  }, [loadedDraft?.id]);
+
+  useEffect(() => {
+    if (!savedRolePrediction || savedRolePrediction.draft_id !== loadedDraft?.id) return;
+    setSelectedRoles((current) => {
+      if (Object.keys(current).length) return current;
+      const restored = {};
+      const ordered = [...loadedPicks].sort((a, b) => a.pick_order - b.pick_order);
+      const radiant = ordered.filter((pick) => pick.side === "radiant");
+      const dire = ordered.filter((pick) => pick.side === "dire");
+      radiant.forEach((pick, index) => {
+        if (savedRolePrediction.radiant_roles?.[index]) {
+          restored[pick.id] = `pos_${savedRolePrediction.radiant_roles[index]}`;
+        }
+      });
+      dire.forEach((pick, index) => {
+        if (savedRolePrediction.dire_roles?.[index]) {
+          restored[pick.id] = `pos_${savedRolePrediction.dire_roles[index]}`;
+        }
+      });
+      return restored;
+    });
+  }, [loadedDraft?.id, savedRolePrediction?.id]);
+
+  const changeRole = (pickId, position) => {
+    setSelectedRoles((current) => ({ ...current, [pickId]: position }));
+    setSubmittedRolePrediction(null);
+    setRolePredictionError(null);
+  };
+
+  const requestRolePrediction = async () => {
+    if (!allRolesSelected || rolePredictionLoading) return;
+    setRolePredictionLoading(true);
+    setRolePredictionError(null);
+    try {
+      const result = await api.createRoleAwarePrediction(
+        gameId,
+        loadedPicks.map((pick) => ({ pick_id: pick.id, position: selectedRoles[pick.id] })),
+      );
+      setSubmittedRolePrediction(result);
+    } catch (requestError) {
+      setRolePredictionError(requestError.message || "Не удалось получить ролевой прогноз.");
+    } finally {
+      setRolePredictionLoading(false);
+    }
+  };
 
   if (loading && !data) {
     return (
@@ -265,7 +347,21 @@ export default function GameDetailsPage() {
               picks={picks}
               radiantTeamName={game?.radiant_team?.name}
               direTeamName={game?.dire_team?.name}
+              roles={selectedRoles}
+              onRoleChange={changeRole}
             />
+            <div className="role-prediction-actions">
+              <button
+                className="button button--primary"
+                type="button"
+                onClick={requestRolePrediction}
+                disabled={!allRolesSelected || rolePredictionLoading}
+              >
+                {rolePredictionLoading ? "Запрашиваем прогноз…" : "Прогноз с учётом ролей"}
+              </button>
+              {!allRolesSelected ? <span>Укажите позиции всех десяти героев.</span> : null}
+              {rolePredictionError ? <p role="alert">{rolePredictionError}</p> : null}
+            </div>
           </div>
         ) : (
           <EmptyState
@@ -283,7 +379,16 @@ export default function GameDetailsPage() {
         draft={draft}
         job={predictionJob}
         status={predictionStatus}
+        variant="standard"
       />
+      {rolePrediction ? (
+        <WinProbability
+          prediction={rolePrediction}
+          draft={draft}
+          status="ready"
+          variant="role-aware"
+        />
+      ) : null}
       <p className="source-note source-note--plain">
         Вероятность — оценка модели по драфту, а не гарантия результата. Фактический результат
         карты отображается отдельно.

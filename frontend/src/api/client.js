@@ -8,10 +8,10 @@ export const POLL_INTERVAL_MS =
     ? configuredPollInterval
     : 30000;
 
-async function request(path, { signal } = {}) {
+async function request(path, { signal, ...options } = {}) {
   let response;
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, { signal });
+    response = await fetch(`${API_BASE_URL}${path}`, { ...options, signal });
   } catch (error) {
     if (error.name === "AbortError") throw error;
     throw new Error("Не удалось подключиться к backend. Проверьте адрес API.");
@@ -184,6 +184,18 @@ export async function getGamePredictions(gameId, { signal } = {}) {
     throw new Error("Backend вернул прогнозы в неожиданном формате.");
   }
   return { game_id: gameId, items: result.items };
+}
+
+export async function createRoleAwarePrediction(gameId, assignments, { signal } = {}) {
+  return request(
+    `/api/v1/games/${encodeURIComponent(gameId)}/predictions/role-aware`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ assignments }),
+      signal,
+    },
+  );
 }
 
 export async function getGamePredictionJobs(gameId, { signal } = {}) {

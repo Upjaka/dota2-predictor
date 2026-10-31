@@ -48,6 +48,67 @@ async def test_match_detail_rejects_invalid_uuid(api_client):
     response = await api_client.get("/api/v1/matches/not-a-uuid")
 
     assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_role_aware_prediction_endpoint_returns_model_details(
+    api_client, monkeypatch
+):
+    from datetime import datetime, timezone
+    from decimal import Decimal
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.api.routes import matches as match_routes
+
+    picks = [SimpleNamespace(id=uuid4()) for _ in range(10)]
+    draft = SimpleNamespace(id=uuid4(), version=3, picks=picks)
+    prediction = SimpleNamespace(
+        id=uuid4(), draft_id=draft.id, model_name="batru_plus",
+        radiant_roles=[1, 2, 3, 4, 5], dire_roles=[5, 4, 3, 2, 1],
+        radiant_probability=Decimal("0.62"), dire_probability=Decimal("0.38"),
+        calculated_at=datetime.now(timezone.utc),
+    )
+
+    async def latest_draft(_repository, _game_id):
+        return True, draft
+
+    class FakeService:
+        @classmethod
+        def from_settings(cls, _session):
+            return cls()
+
+        async def predict_draft_with_roles(self, draft_id, assignments):
+            assert draft_id == draft.id
+            assert len(assignments) == 10
+            return prediction
+
+    monkeypatch.setattr(match_routes.MatchRepository, "get_latest_draft", latest_draft)
+    monkeypatch.setattr(match_routes, "PredictionService", FakeService)
+    response = await api_client.post(
+        f"/api/v1/games/{uuid4()}/predictions/role-aware",
+        json={
+            "assignments": [
+                {"pick_id": str(pick.id), "position": f"pos_{index % 5 + 1}"}
+                for index, pick in enumerate(picks)
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["model_name"] == "batru_plus"
+    assert response.json()["radiant_roles"] == [1, 2, 3, 4, 5]
+    assert response.json()["dire_roles"] == [5, 4, 3, 2, 1]
+
+
+@pytest.mark.asyncio
+async def test_role_aware_prediction_requires_ten_distinct_assignments(api_client):
+    response = await api_client.post(
+        f"/api/v1/games/{uuid4()}/predictions/role-aware",
+        json={"assignments": []},
+    )
+
+    assert response.status_code == 422
     assert response.json()["error"]["code"] == "validation_error"
 
 

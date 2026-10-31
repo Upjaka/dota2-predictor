@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.dependencies import get_db_session
+from app.integrations.batru_errors import BatruError, BatruInvalidResponseError, BatruTemporaryError
 from app.models import Draft
 from app.repositories.matches import MatchRepository
 from app.schemas.matches import (
@@ -22,9 +23,19 @@ from app.schemas.matches import (
     PredictionJobRead,
     PredictionListResponse,
     PredictionRead,
+    RoleAwarePredictionRead,
+    RoleAwarePredictionRequest,
     TournamentRead,
 )
 from app.services.draft_completion import is_draft_complete
+from app.services.predictions import (
+    DraftNotFoundError,
+    HeroMappingError,
+    InvalidDraftError,
+    InvalidRoleAssignmentError,
+    PredictionService,
+    PredictionServiceError,
+)
 
 router = APIRouter()
 
@@ -264,12 +275,73 @@ async def get_game_predictions(
                 draft_id=prediction.draft_id,
                 draft_version=version,
                 model_name=prediction.model_name,
+                radiant_roles=prediction.radiant_roles,
+                dire_roles=prediction.dire_roles,
                 radiant_probability=prediction.radiant_probability,
                 dire_probability=prediction.dire_probability,
                 calculated_at=prediction.calculated_at,
             )
             for prediction, version in rows
         ],
+    )
+
+
+@router.post(
+    "/games/{game_id}/predictions/role-aware",
+    response_model=RoleAwarePredictionRead,
+)
+async def create_role_aware_prediction(
+    game_id: UUID,
+    request: RoleAwarePredictionRequest,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> RoleAwarePredictionRead:
+    if len(request.assignments) != 10 or len({item.pick_id for item in request.assignments}) != 10:
+        raise HTTPException(
+            status_code=422,
+            detail="Provide exactly one role for each of the ten draft picks.",
+        )
+    game_exists, draft = await MatchRepository(session).get_latest_draft(game_id)
+    if not game_exists:
+        raise HTTPException(status_code=404, detail="Game not found.")
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Draft not found for this game.")
+    draft_id = draft.id
+    draft_version = draft.version
+
+    try:
+        # The repository lookup above opens SQLAlchemy's autobegin transaction.
+        # It is read-only, so close it before the service opens its own unit of work.
+        if getattr(session, "in_transaction", lambda: False)():
+            await session.rollback()
+        prediction = await PredictionService.from_settings(session).predict_draft_with_roles(
+            draft_id,
+            {item.pick_id: item.position for item in request.assignments},
+        )
+    except DraftNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (InvalidDraftError, InvalidRoleAssignmentError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except HeroMappingError as exc:
+        raise HTTPException(status_code=422, detail="A draft hero has no Batru mapping.") from exc
+    except BatruTemporaryError as exc:
+        raise HTTPException(status_code=503, detail="Batru prediction is temporarily unavailable.") from exc
+    except BatruInvalidResponseError as exc:
+        raise HTTPException(status_code=502, detail="Batru returned an invalid response.") from exc
+    except BatruError as exc:
+        raise HTTPException(status_code=502, detail="Batru rejected the prediction request.") from exc
+    except PredictionServiceError as exc:
+        raise HTTPException(status_code=502, detail="Batru returned an invalid prediction.") from exc
+
+    return RoleAwarePredictionRead(
+        id=prediction.id,
+        draft_id=prediction.draft_id,
+        draft_version=draft_version,
+        model_name=prediction.model_name,
+        radiant_roles=prediction.radiant_roles,
+        dire_roles=prediction.dire_roles,
+        radiant_probability=prediction.radiant_probability,
+        dire_probability=prediction.dire_probability,
+        calculated_at=prediction.calculated_at,
     )
 
 

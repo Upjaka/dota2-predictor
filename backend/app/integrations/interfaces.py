@@ -76,6 +76,8 @@ class ProviderMatchDetails:
 class Draft:
     radiant_heroes: Sequence[str]
     dire_heroes: Sequence[str]
+    radiant_roles: Sequence[int] | None = None
+    dire_roles: Sequence[int] | None = None
 
 
 @dataclass(frozen=True)

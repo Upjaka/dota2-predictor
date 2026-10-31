@@ -112,6 +112,9 @@ class BatruClient:
 
     async def predict_draft(self, draft: BatruDraft) -> DraftPrediction:
         payload = {"radiant": list(draft.radiant_heroes), "dire": list(draft.dire_heroes)}
+        if draft.radiant_roles is not None and draft.dire_roles is not None:
+            payload["radiant_roles"] = list(draft.radiant_roles)
+            payload["dire_roles"] = list(draft.dire_roles)
         try:
             if self._http_client is None:
                 async with httpx.AsyncClient(timeout=self._timeout) as client:

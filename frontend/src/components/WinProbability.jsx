@@ -36,7 +36,22 @@ function emptyMessageFor(status, job) {
   return "Прогноз появится после получения всех десяти сопоставленных героев.";
 }
 
-export default function WinProbability({ prediction, draft, job, status }) {
+export default function WinProbability({
+  prediction,
+  draft,
+  job,
+  status,
+  variant = "standard",
+}) {
+  const isRoleAware = variant === "role-aware";
+  const panelClass = isRoleAware
+    ? "panel forecast-panel forecast-panel--role-aware"
+    : "panel forecast-panel forecast-panel--standard";
+  const eyebrow = isRoleAware ? "ПРОГНОЗ С УЧЁТОМ РОЛЕЙ" : "ОБЫЧНЫЙ ПРОГНОЗ · ТОЛЬКО ПИК";
+  const heading = isRoleAware
+    ? "Вероятность победы с учётом ролей"
+    : "Вероятность победы по пику";
+
   if (!prediction) {
     const picks = draft?.picks || [];
     const missingHeroes = Math.max(
@@ -57,11 +72,11 @@ export default function WinProbability({ prediction, draft, job, status }) {
       unknown: "Статус уточняется",
     };
     return (
-      <section className="panel forecast-panel">
+      <section className={panelClass}>
         <div className="panel-heading">
           <div>
-            <p className="eyebrow">АНАЛИТИКА</p>
-            <h2>Прогноз победы</h2>
+            <p className="eyebrow">{eyebrow}</p>
+            <h2>{heading}</h2>
           </div>
           <span
             className={`badge ${
@@ -88,11 +103,11 @@ export default function WinProbability({ prediction, draft, job, status }) {
   const radiant = asPercentage(prediction.radiant_probability);
   const dire = asPercentage(prediction.dire_probability);
   return (
-    <section className="panel forecast-panel">
+    <section className={panelClass}>
       <div className="panel-heading">
         <div>
-          <p className="eyebrow">АНАЛИТИКА</p>
-          <h2>Вероятность победы</h2>
+          <p className="eyebrow">{eyebrow}</p>
+          <h2>{heading}</h2>
         </div>
         <span className="badge badge--success">Прогноз получен</span>
       </div>
@@ -120,7 +135,11 @@ export default function WinProbability({ prediction, draft, job, status }) {
         </div>
         <div>
           <dt>Модель</dt>
-          <dd>{prediction.model_name || "Не указана"}</dd>
+          <dd>
+            {prediction.model_name === "batru_plus"
+              ? "Batru Plus (с учётом ролей)"
+              : prediction.model_name || "Не указана"}
+          </dd>
         </div>
       </dl>
       <p className="disclaimer">

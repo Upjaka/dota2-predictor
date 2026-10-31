@@ -1033,6 +1033,48 @@ p {
   background: rgba(255, 255, 255, 0.018);
 }
 
+.hero-slot-with-role {
+  display: grid;
+  gap: 8px;
+}
+
+.role-select {
+  display: grid;
+  gap: 4px;
+  color: var(--muted, #9ca3af);
+  font-size: 0.75rem;
+}
+
+.role-select select {
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 9px;
+  color: inherit;
+  background: var(--surface-raised, #111827);
+  border: 1px solid var(--border, #374151);
+  border-radius: 8px;
+}
+
+.role-prediction-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.role-prediction-actions > span,
+.role-prediction-actions > p {
+  color: var(--muted, #9ca3af);
+  font-size: 0.875rem;
+}
+
+.role-prediction-actions > p {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--danger, #f87171);
+}
+
 .hero-slot--picked {
   border-color: rgba(215, 226, 242, 0.11);
 }
@@ -1089,6 +1131,20 @@ p {
 .forecast-panel {
   margin-top: 15px;
   padding: 20px;
+}
+
+.forecast-panel--standard {
+  border-left: 3px solid rgba(215, 226, 242, 0.22);
+}
+
+.forecast-panel--role-aware {
+  border-left: 3px solid var(--radiant);
+  background: linear-gradient(110deg, rgba(102, 199, 154, 0.055), transparent 48%),
+    rgba(17, 23, 32, 0.78);
+}
+
+.forecast-panel--role-aware .eyebrow {
+  color: var(--radiant);
 }
 
 .forecast-panel .panel-heading {

@@ -1,8 +1,10 @@
 import asyncio
+import hashlib
 from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -36,6 +38,10 @@ class HeroMappingError(PredictionServiceError):
 
 
 class PredictionResponseError(PredictionServiceError):
+    pass
+
+
+class InvalidRoleAssignmentError(PredictionServiceError):
     pass
 
 
@@ -135,6 +141,110 @@ class PredictionService:
             self.session.add(prediction)
             await self.session.flush()
             return prediction
+
+    async def predict_draft_with_roles(
+        self, draft_id: UUID, assignments: dict[UUID, str]
+    ) -> Prediction:
+        model_name = "batru_plus"
+        async with self.session.begin():
+            result = await self.session.execute(
+                select(Draft)
+                .where(Draft.id == draft_id)
+                .options(
+                    selectinload(Draft.picks)
+                    .joinedload(DraftPick.hero)
+                    .joinedload(Hero.batru_mapping)
+                )
+                .with_for_update(of=Draft)
+            )
+            draft = result.scalar_one_or_none()
+            if draft is None:
+                raise DraftNotFoundError("Draft not found.")
+
+            _validate_lineup(draft.picks)
+            if not is_draft_complete(draft.picks):
+                raise InvalidDraftError("A complete draft must contain valid canonical heroes.")
+            ordered = sorted(draft.picks, key=lambda item: item.pick_order)
+            pick_ids = {pick.id for pick in ordered}
+            if set(assignments) != pick_ids:
+                raise InvalidRoleAssignmentError(
+                    "Exactly one role must be provided for every pick in this draft."
+                )
+            role_numbers = {f"pos_{number}": number for number in range(1, 6)}
+            if any(role not in role_numbers for role in assignments.values()):
+                raise InvalidRoleAssignmentError("Roles must be pos_1 through pos_5.")
+
+            radiant_roles = [
+                role_numbers[assignments[pick.id]]
+                for pick in ordered if pick.side == "radiant"
+            ]
+            dire_roles = [
+                role_numbers[assignments[pick.id]]
+                for pick in ordered if pick.side == "dire"
+            ]
+            role_signature = hashlib.sha256(
+                (",".join(map(str, radiant_roles)) + ":" + ",".join(map(str, dire_roles))).encode()
+            ).hexdigest()
+            existing = await self.session.scalar(
+                select(Prediction).where(
+                    Prediction.draft_id == draft.id,
+                    Prediction.model_name == model_name,
+                    Prediction.role_signature == role_signature,
+                )
+            )
+            if existing is not None:
+                return existing
+
+            try:
+                batru_draft = BatruHeroMapper.to_batru_draft(draft.picks)
+            except UnmappedBatruHeroError as exc:
+                raise HeroMappingError(str(exc)) from exc
+            except ValueError as exc:
+                raise InvalidDraftError(str(exc)) from exc
+            batru_draft = BatruDraft(
+                radiant_heroes=batru_draft.radiant_heroes,
+                dire_heroes=batru_draft.dire_heroes,
+                radiant_roles=tuple(radiant_roles),
+                dire_roles=tuple(dire_roles),
+            )
+
+        forecast = await self._request_prediction(batru_draft)
+        _validate_probabilities(forecast.radiant_probability, forecast.dire_probability)
+
+        try:
+            async with self.session.begin():
+                existing = await self.session.scalar(
+                    select(Prediction).where(
+                        Prediction.draft_id == draft_id,
+                        Prediction.model_name == model_name,
+                        Prediction.role_signature == role_signature,
+                    )
+                )
+                if existing is not None:
+                    return existing
+                prediction = Prediction(
+                    draft_id=draft_id,
+                    model_name=model_name,
+                    role_signature=role_signature,
+                    radiant_roles=radiant_roles,
+                    dire_roles=dire_roles,
+                    radiant_probability=forecast.radiant_probability,
+                    dire_probability=forecast.dire_probability,
+                )
+                self.session.add(prediction)
+                await self.session.flush()
+                return prediction
+        except IntegrityError:
+            existing = await self.session.scalar(
+                select(Prediction).where(
+                    Prediction.draft_id == draft_id,
+                    Prediction.model_name == model_name,
+                    Prediction.role_signature == role_signature,
+                )
+            )
+            if existing is None:
+                raise
+            return existing
 
     async def _request_prediction(self, draft: BatruDraft) -> DraftPrediction:
         for attempt in range(self.max_retries + 1):

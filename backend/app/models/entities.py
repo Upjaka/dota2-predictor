@@ -9,6 +9,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    JSON,
     Numeric,
     String,
     Text,
@@ -261,7 +262,10 @@ class Prediction(Base):
             name="ck_predictions_dire_probability",
         ),
         CheckConstraint("length(trim(model_name)) > 0", name="ck_predictions_model_name"),
-        UniqueConstraint("draft_id", "model_name", name="uq_predictions_draft_model"),
+        UniqueConstraint(
+            "draft_id", "model_name", "role_signature",
+            name="uq_predictions_draft_model_roles",
+        ),
         Index("ix_predictions_draft_calculated_at", "draft_id", "calculated_at"),
     )
 
@@ -274,6 +278,11 @@ class Prediction(Base):
     model_name: Mapped[str] = mapped_column(
         String(100), default="default", server_default=text("'default'")
     )
+    role_signature: Mapped[str] = mapped_column(
+        String(64), default="default", server_default=text("'default'"), nullable=False
+    )
+    radiant_roles: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
+    dire_roles: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
     calculated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

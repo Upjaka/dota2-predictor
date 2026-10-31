@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getDashboard, getGameDraft, getMatches, getTournaments } from "./client.js";
+import { createRoleAwarePrediction, getDashboard, getGameDraft, getMatches, getTournaments } from "./client.js";
 
 function response(status, body) {
   const text = JSON.stringify(body);
@@ -16,6 +16,21 @@ afterEach(() => {
 });
 
 describe("API client", () => {
+  it("posts all selected hero roles to the role-aware prediction endpoint", async () => {
+    const fetch = vi.fn().mockResolvedValue(response(200, { model_name: "batru_plus" }));
+    vi.stubGlobal("fetch", fetch);
+    const assignments = [{ pick_id: "pick-1", position: "pos_1" }];
+
+    await createRoleAwarePrediction("game/1", assignments);
+
+    expect(fetch.mock.calls[0][0]).toContain("/api/v1/games/game%2F1/predictions/role-aware");
+    expect(fetch.mock.calls[0][1]).toMatchObject({
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ assignments }),
+    });
+  });
+
   it("loads a 20-match dashboard page in one HTTP request", async () => {
     const items = Array.from({ length: 20 }, (_, index) => ({
       id: `series-${index}`,

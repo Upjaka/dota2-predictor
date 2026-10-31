@@ -12,6 +12,7 @@ from app.services.predictions import (
     HeroMappingError,
     InvalidDraftError,
     PredictionResponseError,
+    InvalidRoleAssignmentError,
     PredictionService,
 )
 
@@ -80,6 +81,62 @@ async def test_completed_draft_is_predicted_and_persisted_once(
         f"batru_hero_1_{index}" for index in range(5, 10)
     ]
     assert await sqlite_session.scalar(select(func.count()).select_from(Prediction)) == 1
+
+
+@pytest.mark.asyncio
+async def test_role_aware_forecast_is_saved_per_distinct_role_configuration(
+    sqlite_session, create_draft
+):
+    from app.models import Draft
+
+    draft_id = await create_draft()
+    draft = await sqlite_session.scalar(
+        select(Draft).where(Draft.id == draft_id).options(selectinload(Draft.picks))
+    )
+    assignments = {
+        pick.id: f"pos_{(index % 5) + 1}"
+        for index, pick in enumerate(sorted(draft.picks, key=lambda item: item.pick_order))
+    }
+    await sqlite_session.commit()
+    batru = FakeBatruClient([prediction(), prediction("0.55", "0.45")])
+    service = PredictionService(sqlite_session, batru, retry_backoff_seconds=0)
+
+    first = await service.predict_draft_with_roles(draft_id, assignments)
+    repeated = await service.predict_draft_with_roles(draft_id, assignments)
+    alternate = await service.predict_draft_with_roles(
+        draft_id,
+        {pick_id: f"pos_{(int(role[-1]) % 5) + 1}" for pick_id, role in assignments.items()},
+    )
+
+    assert first.id == repeated.id
+    assert alternate.id != first.id
+    assert first.model_name == "batru_plus"
+    assert first.radiant_roles == [1, 2, 3, 4, 5]
+    assert first.dire_roles == [1, 2, 3, 4, 5]
+    assert list(batru.requests[0].radiant_roles) == [1, 2, 3, 4, 5]
+    assert list(batru.requests[0].dire_roles) == [1, 2, 3, 4, 5]
+    assert await sqlite_session.scalar(select(func.count()).select_from(Prediction)) == 2
+
+
+@pytest.mark.asyncio
+async def test_role_aware_forecast_rejects_missing_pick_role_without_calling_batru(
+    sqlite_session, create_draft
+):
+    from app.models import Draft
+
+    draft_id = await create_draft()
+    draft = await sqlite_session.scalar(
+        select(Draft).where(Draft.id == draft_id).options(selectinload(Draft.picks))
+    )
+    assignments = {pick.id: "pos_1" for pick in draft.picks[:-1]}
+    await sqlite_session.commit()
+    batru = FakeBatruClient([])
+
+    with pytest.raises(InvalidRoleAssignmentError, match="every pick"):
+        await PredictionService(sqlite_session, batru).predict_draft_with_roles(
+            draft_id, assignments
+        )
+    assert batru.requests == []
 
 
 @pytest.mark.asyncio

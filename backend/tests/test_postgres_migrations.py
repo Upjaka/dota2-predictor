@@ -113,6 +113,12 @@ def test_alembic_migrations_apply_to_dedicated_postgres_database(monkeypatch):
                         )
                     }
                 )
+                prediction_columns = await connection.run_sync(
+                    lambda sync_connection: {
+                        column["name"]
+                        for column in inspect(sync_connection).get_columns("predictions")
+                    }
+                )
             assert {"matches", "match_games", "drafts", "prediction_jobs", "predictions"} <= tables
             assert "details_error" in columns
             assert "pick_order_is_chronological" in draft_columns
@@ -122,7 +128,8 @@ def test_alembic_migrations_apply_to_dedicated_postgres_database(monkeypatch):
             assert "failure_code" in prediction_job_columns
             assert "unknown" in match_status_default
             assert "uq_prediction_jobs_draft_model" in job_constraints
-            assert "uq_predictions_draft_model" in prediction_constraints
+            assert "uq_predictions_draft_model_roles" in prediction_constraints
+            assert {"role_signature", "radiant_roles", "dire_roles"} <= prediction_columns
 
             sessions = async_sessionmaker(engine, expire_on_commit=False)
             async with sessions() as session:
@@ -196,10 +203,23 @@ def test_alembic_migrations_apply_to_dedicated_postgres_database(monkeypatch):
                             )
                             await session.flush()
 
+                    session.add(
+                        Prediction(
+                            draft=draft,
+                            model_name="integration-test",
+                            role_signature="different-role-layout",
+                            radiant_roles=[1, 2, 3, 4, 5],
+                            dire_roles=[5, 4, 3, 2, 1],
+                            radiant_probability=Decimal("0.5500000"),
+                            dire_probability=Decimal("0.4500000"),
+                        )
+                    )
+                    await session.flush()
+
                     prediction_count = await session.scalar(
                         select(func.count()).select_from(Prediction)
                     )
-                    assert prediction_count == 1
+                    assert prediction_count == 2
                 finally:
                     await session.rollback()
         finally:

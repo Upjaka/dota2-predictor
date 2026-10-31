@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { api } from "../api/index.js";
@@ -10,6 +10,7 @@ vi.mock("../api/index.js", () => ({
     getGameDraft: vi.fn(),
     getGamePredictions: vi.fn(),
     getGamePredictionJobs: vi.fn(),
+    createRoleAwarePrediction: vi.fn(),
   },
   latestForDraft: vi.fn((items, draft) =>
     draft ? items.find((item) => item.draft_version === draft.version) || null : null,
@@ -48,6 +49,7 @@ describe("GameDetailsPage draft states", () => {
     api.getGameDraft.mockReset();
     api.getGamePredictions.mockReset().mockResolvedValue({ items: [] });
     api.getGamePredictionJobs.mockReset().mockResolvedValue({ items: [] });
+    api.createRoleAwarePrediction.mockReset();
   });
 
   it("labels a partial draft clearly and renders its real hero", async () => {
@@ -107,6 +109,48 @@ describe("GameDetailsPage draft states", () => {
     });
     expect(screen.getAllByText("5 / 5")).toHaveLength(2);
     expect(screen.queryByText(/ожидает завершения карты/i)).not.toBeInTheDocument();
+  });
+
+  it("requires all ten roles and displays a saved role-aware forecast", async () => {
+    const picks = Array.from({ length: 10 }, (_, index) => ({
+      id: `pick-${index + 1}`,
+      side: index < 5 ? "radiant" : "dire",
+      pick_order: index + 1,
+      hero_name: `Hero ${index + 1}`,
+    }));
+    api.getGameDraft.mockResolvedValue({ version: 1, id: "draft-1", is_complete: true, picks });
+    api.createRoleAwarePrediction.mockResolvedValue({
+      id: "prediction-role-1",
+      draft_id: "draft-1",
+      draft_version: 1,
+      model_name: "batru_plus",
+      radiant_probability: "0.62",
+      dire_probability: "0.38",
+      radiant_roles: [1, 2, 3, 4, 5],
+      dire_roles: [1, 2, 3, 4, 5],
+    });
+
+    renderGameDetails();
+
+    const button = await screen.findByRole("button", { name: "Прогноз с учётом ролей" });
+    expect(button).toBeDisabled();
+    for (let index = 0; index < picks.length; index += 1) {
+      fireEvent.change(screen.getByRole("combobox", { name: `Позиция: Hero ${index + 1}` }), {
+        target: { value: `pos_${index % 5 + 1}` },
+      });
+    }
+    expect(button).toBeEnabled();
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(api.createRoleAwarePrediction).toHaveBeenCalledWith(
+        "game-1",
+        picks.map((pick, index) => ({ pick_id: pick.id, position: `pos_${index % 5 + 1}` })),
+      );
+      expect(screen.getByText("62%")).toBeInTheDocument();
+      expect(screen.getByText("38%")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Batru Plus (с учётом ролей)")).toBeInTheDocument();
   });
 
   it("uses the selected map's sides when teams swap sides within a series", async () => {

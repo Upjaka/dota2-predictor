@@ -215,6 +215,19 @@ The optional `status` filter supports the series statuses `unknown`, `scheduled`
 
 The prediction-jobs endpoint returns an `items` list for an existing game, including each draft version's model, state, attempt count, and last error. Job states are `queued`, `running`, `succeeded`, and `failed`; an empty list means no job has been created for that map yet. Match-game responses include `details_error` when the worker's most recent provider-details retrieval failed; a successful refresh clears it.
 
+## Application logs and diagnostics
+
+Backend and worker logs use the same UTC timestamp format with millisecond precision and are written to stdout/stderr. Set `LOG_LEVEL=DEBUG` in `.env` and recreate `api` and `worker` to enable detailed Python logs; the default is `INFO`. Frontend request diagnostics are disabled by default; set `VITE_DEBUG_LOGGING=true` and restart the frontend dev server to log request start, response status, and duration in the browser console. Logs include request paths and correlation IDs, but not request bodies or API responses.
+
+Each HTTP request has an `X-Request-ID`, returned in the response and logged by the API. The worker creates a `cycle_id` per polling cycle, carried by its logs across live-feed retrieval and match ingestion. This project uses a polling worker and HTTP polling frontend; it currently has no Celery or WebSocket components.
+
+```powershell
+docker compose logs -f api worker
+docker compose logs --since 30m api worker
+docker compose logs --since 30m worker | Select-String 'cycle=YOUR_CYCLE_ID'
+docker compose logs --since 30m worker | Select-String 'match_id=YOUR_MATCH_ID'
+```
+
 ## Database migrations
 
 Start PostgreSQL and apply the schema migration before starting the API and worker:

@@ -8,14 +8,28 @@ export const POLL_INTERVAL_MS =
     ? configuredPollInterval
     : 5000;
 
+const DEBUG_LOGGING = import.meta.env.VITE_DEBUG_LOGGING === "true";
+const debugLog = (event, details) => {
+  if (DEBUG_LOGGING) console.debug(`[draftwatch] ${new Date().toISOString()} ${event}`, details);
+};
+
 async function request(path, { signal, ...options } = {}) {
   let response;
+  const requestId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const method = (options.method || "GET").toUpperCase();
+  const started = performance.now();
+  const headers = new Headers(options.headers || {});
+  headers.set("X-Request-ID", requestId);
+  debugLog("http_request_started", { request_id: requestId, method, path });
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, { ...options, signal });
+    response = await fetch(`${API_BASE_URL}${path}`, { ...options, headers, signal });
   } catch (error) {
     if (error.name === "AbortError") throw error;
+    debugLog("http_request_failed", { request_id: requestId, method, path, duration_ms: Math.round(performance.now() - started), error: error.message });
     throw new Error("Не удалось подключиться к backend. Проверьте адрес API.");
   }
+
+  debugLog("http_response_received", { request_id: response.headers?.get("X-Request-ID") || requestId, method, path, status: response.status, duration_ms: Math.round(performance.now() - started) });
 
   if (!response.ok) {
     let message = `Backend вернул ошибку (${response.status}).`;

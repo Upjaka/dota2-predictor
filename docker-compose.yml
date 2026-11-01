@@ -23,6 +23,7 @@ services:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
       BATRU_BASE_URL: ${BATRU_BASE_URL:-https://batru.gg}
       BATRU_TIMEOUT_SECONDS: ${BATRU_TIMEOUT_SECONDS:-8}
@@ -56,6 +57,7 @@ services:
     command: python -m app.workers.main
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
       BATRU_BASE_URL: ${BATRU_BASE_URL:-https://batru.gg}
       BATRU_TIMEOUT_SECONDS: ${BATRU_TIMEOUT_SECONDS:-8}
       BATRU_MAX_RETRIES: ${BATRU_MAX_RETRIES:-2}
@@ -83,6 +85,7 @@ services:
     environment:
       VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
       VITE_POLL_INTERVAL_MS: ${VITE_POLL_INTERVAL_MS:-5000}
+      VITE_DEBUG_LOGGING: ${VITE_DEBUG_LOGGING:-false}
     ports:
       - "5173:5173"
     depends_on:

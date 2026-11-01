@@ -5,7 +5,7 @@ import time
 from collections import Counter
 from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 from sqlalchemy import case, exists, func, or_, select
@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
 from app.core.config import get_settings
-from app.core.logging import configure_logging
+from app.core.logging import configure_logging, cycle_id_var
 from app.db.session import AsyncSessionLocal, engine
 from app.integrations.batru_client import BatruClient
 from app.integrations.batru_errors import (
@@ -104,7 +104,8 @@ class MatchMonitoringWorker:
             try:
                 await self.run_cycle()
             except Exception:
-                logger.exception("event=worker_cycle_failed")
+                # run_cycle has already logged the failure with its cycle_id.
+                pass
 
             remaining = max(
                 0.0, self.poll_interval_seconds - (time.monotonic() - cycle_started)
@@ -117,6 +118,20 @@ class MatchMonitoringWorker:
         logger.info("event=worker_stopped")
 
     async def run_cycle(self) -> None:
+        cycle_id = str(uuid4())
+        token = cycle_id_var.set(cycle_id)
+        started = time.perf_counter()
+        logger.info("event=worker_cycle_started")
+        try:
+            await self._run_cycle()
+        except Exception:
+            logger.exception("event=worker_cycle_failed")
+            raise
+        finally:
+            logger.info("event=worker_cycle_finished duration_ms=%.2f", (time.perf_counter() - started) * 1000)
+            cycle_id_var.reset(token)
+
+    async def _run_cycle(self) -> None:
         try:
             await self._sync_hero_directory()
         except (OpenDotaError, SQLAlchemyError):

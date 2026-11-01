@@ -1,7 +1,10 @@
 from contextlib import asynccontextmanager
 import logging
+import re
+import time
+from uuid import uuid4
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -11,7 +14,7 @@ from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from app.api.routes.health import router as health_router
 from app.api.routes.matches import router as matches_router
 from app.core.config import get_settings
-from app.core.logging import configure_logging
+from app.core.logging import configure_logging, request_id_var
 from app.db.session import engine
 
 configure_logging()
@@ -37,7 +40,32 @@ app.add_middleware(
     allow_origins=settings.allowed_origins,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Request-ID"],
 )
+
+
+@app.middleware("http")
+async def log_http_request(request: Request, call_next):
+    supplied_id = request.headers.get("x-request-id", "")
+    request_id = supplied_id if re.fullmatch(r"[A-Za-z0-9._-]{1,100}", supplied_id) else str(uuid4())
+    token = request_id_var.set(request_id)
+    started = time.perf_counter()
+    try:
+        response = await call_next(request)
+        duration_ms = (time.perf_counter() - started) * 1000
+        response.headers["X-Request-ID"] = request_id
+        logging.getLogger("backend.http").info(
+            "event=http_request_completed method=%s path=%s status=%d duration_ms=%.2f",
+            request.method, request.url.path, response.status_code, duration_ms,
+        )
+        return response
+    except Exception:
+        logging.getLogger("backend.http").exception(
+            "event=http_request_failed method=%s path=%s", request.method, request.url.path
+        )
+        raise
+    finally:
+        request_id_var.reset(token)
 app.include_router(health_router, prefix="/api/v1")
 app.include_router(matches_router, prefix="/api/v1")
 

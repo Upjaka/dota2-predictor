@@ -15,6 +15,7 @@ htmlcov/
 frontend/node_modules/
 frontend/dist/
 frontend/coverage/
+reports/*.xlsx
 .vscode/
 .idea/
 .DS_Store

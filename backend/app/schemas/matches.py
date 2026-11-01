@@ -84,6 +84,8 @@ class DashboardDraftPickRead(BaseModel):
 class DashboardGameRead(BaseModel):
     id: UUID
     game_number: int
+    radiant_team_id: UUID | None = None
+    dire_team_id: UUID | None = None
     started_at: datetime | None
     status: str
     duration_seconds: int | None

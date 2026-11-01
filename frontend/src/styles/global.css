@@ -594,10 +594,59 @@ p {
 }
 
 .match-card__draft-picks {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 10px 0 12px 38px;
+}
+
+.match-card__draft-toggle {
   display: flex;
-  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 0 0 38px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 10px;
+  list-style: none;
+}
+
+.match-card__draft-toggle::-webkit-details-marker {
+  display: none;
+}
+
+.match-card__draft-toggle::before {
+  color: var(--accent);
+  content: "+";
+  font-family: "DM Mono", monospace;
+}
+
+.match-card__draft[open] .match-card__draft-toggle::before {
+  content: "−";
+}
+
+.match-card__draft-toggle span {
+  color: var(--dim);
+  font-family: "DM Mono", monospace;
+}
+
+.match-card__draft-team {
+  min-width: 0;
+}
+
+.match-card__draft-team h3 {
+  overflow: hidden;
+  margin: 0 0 7px;
+  color: var(--dim);
+  font-size: 9px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.match-card__draft-heroes {
+  display: grid;
   gap: 6px;
-  padding: 0 0 12px 38px;
 }
 
 .match-card__draft-pick {
@@ -1404,6 +1453,10 @@ p {
   }
 
   .match-card__draft-picks {
+    padding-left: 0;
+  }
+
+  .match-card__draft-toggle {
     padding-left: 0;
   }
 

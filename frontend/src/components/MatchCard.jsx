@@ -46,6 +46,15 @@ export default function MatchCard({ match }) {
   const status = MATCH_STATUS[match.status] || MATCH_STATUS.unknown;
   const detailsError = match.detailsError || match.currentGame?.details_error;
   const game = match.currentGame;
+  const picks = match.draft?.picks || [];
+  const radiantTeamId = game?.radiant_team_id;
+  const direTeamId = game?.dire_team_id;
+  const teamOneSide = radiantTeamId === match.team_one?.id
+    ? "radiant"
+    : direTeamId === match.team_one?.id
+      ? "dire"
+      : "radiant";
+  const teamTwoSide = teamOneSide === "radiant" ? "dire" : "radiant";
   const hasCompletedGameResult = game?.status === "completed";
   const winningTeamId = hasCompletedGameResult ? game.winner_team_id : null;
   const teamOneWon = winningTeamId && winningTeamId === match.team_one?.id;
@@ -96,15 +105,28 @@ export default function MatchCard({ match }) {
         {match.format ? <span>{match.format}</span> : null}
       </div>
 
-      {match.draft?.picks?.length ? (
-        <div className="match-card__draft-picks" aria-label="Выбранные герои">
-          {match.draft.picks.map((pick, index) => (
-            <span className="match-card__draft-pick" key={`${pick.side}-${pick.hero_name}-${index}`}>
-              {pick.hero_image_url ? <img src={pick.hero_image_url} alt="" loading="lazy" /> : null}
-              <span>{pick.hero_name}</span>
-            </span>
-          ))}
-        </div>
+      {picks.length ? (
+        <details className="match-card__draft">
+          <summary className="match-card__draft-toggle">Герои команд <span>{picks.length}</span></summary>
+          <div className="match-card__draft-picks">
+            {[
+              { team: match.team_one, side: teamOneSide },
+              { team: match.team_two, side: teamTwoSide },
+            ].map(({ team, side }) => (
+              <section className="match-card__draft-team" key={side} aria-label={team?.name || "Команда не указана"}>
+                <h3>{team?.name || "Команда не указана"}</h3>
+                <div className="match-card__draft-heroes">
+                  {picks.filter((pick) => pick.side === side).map((pick, index) => (
+                    <span className="match-card__draft-pick" key={`${pick.side}-${pick.hero_name}-${index}`}>
+                      {pick.hero_image_url ? <img src={pick.hero_image_url} alt="" loading="lazy" /> : null}
+                      <span>{pick.hero_name}</span>
+                    </span>
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
+        </details>
       ) : null}
 
       <div className="match-card__bottom">

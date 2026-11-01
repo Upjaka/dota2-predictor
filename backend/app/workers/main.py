@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 import httpx
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import case, exists, func, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
@@ -70,6 +70,7 @@ class MatchMonitoringWorker:
         job_stale_seconds: float,
         job_max_attempts: int,
         model_name: str,
+        details_retry_seconds: float = 60.0,
         session_factory: async_sessionmaker[AsyncSession] | None = None,
     ) -> None:
         self.provider = provider
@@ -77,6 +78,7 @@ class MatchMonitoringWorker:
         self.poll_interval_seconds = poll_interval_seconds
         self.max_details_per_cycle = max_details_per_cycle
         self.details_recheck_seconds = details_recheck_seconds
+        self.details_retry_seconds = details_retry_seconds
         self.job_stale_seconds = job_stale_seconds
         self.job_max_attempts = job_max_attempts
         self.model_name = model_name
@@ -121,11 +123,6 @@ class MatchMonitoringWorker:
             logger.exception("event=hero_directory_sync_failed")
 
         try:
-            await self._sync_batru_hero_directory()
-        except (BatruError, SQLAlchemyError, WorkerDataError):
-            logger.exception("event=batru_hero_directory_sync_failed")
-
-        try:
             live_snapshots = await self.provider.get_live_matches()
         except OpenDotaError:
             logger.exception(
@@ -139,6 +136,11 @@ class MatchMonitoringWorker:
                 len(live_snapshots),
             )
             await self._ingest_snapshots(live_snapshots)
+
+        try:
+            await self._sync_batru_hero_directory()
+        except (BatruError, SQLAlchemyError, WorkerDataError):
+            logger.exception("event=batru_hero_directory_sync_failed")
 
         try:
             snapshots = await self.provider.get_current_matches()
@@ -632,6 +634,26 @@ class MatchMonitoringWorker:
 
     async def _refresh_due_match_details(self) -> None:
         cutoff = datetime.now(UTC) - timedelta(seconds=self.details_recheck_seconds)
+        retry_cutoff = datetime.now(UTC) - timedelta(seconds=self.details_retry_seconds)
+        radiant_five = (
+            select(DraftPick.draft_id)
+            .where(DraftPick.side == "radiant")
+            .group_by(DraftPick.draft_id)
+            .having(func.count(DraftPick.id) == 5)
+        )
+        dire_five = (
+            select(DraftPick.draft_id)
+            .where(DraftPick.side == "dire")
+            .group_by(DraftPick.draft_id)
+            .having(func.count(DraftPick.id) == 5)
+        )
+        has_complete_draft = exists(
+            select(Draft.id).where(
+                Draft.match_game_id == MatchGame.id,
+                Draft.id.in_(radiant_five),
+                Draft.id.in_(dire_five),
+            )
+        )
         async with self._session_factory() as session:
             due_ids = list(
                 (
@@ -643,7 +665,18 @@ class MatchMonitoringWorker:
                             MatchGame.status != "live",
                             or_(
                                 MatchGame.details_checked_at.is_(None),
-                                MatchGame.details_checked_at <= cutoff,
+                                (
+                                    MatchGame.details_error.is_(None)
+                                    & (MatchGame.details_checked_at <= cutoff)
+                                ),
+                                (
+                                    MatchGame.details_error.is_not(None)
+                                    & (MatchGame.details_checked_at <= retry_cutoff)
+                                ),
+                                (
+                                    ~has_complete_draft
+                                    & (MatchGame.details_checked_at <= retry_cutoff)
+                                ),
                             ),
                         )
                         .order_by(
@@ -796,7 +829,9 @@ class MatchMonitoringWorker:
                 continue
             resolved_incoming.append((source_pick, hero))
 
-        replaces_full_snapshot = len(incoming_picks) == 10
+        # An apparent full snapshot is not authoritative if some heroes could
+        # not be resolved yet; replacing in that case would erase known picks.
+        replaces_full_snapshot = len(resolved_incoming) == 10
         if replaces_full_snapshot:
             stored_by_hero = {
                 source_pick.external_hero_id: (
@@ -1175,6 +1210,7 @@ async def run() -> None:
                 poll_interval_seconds=settings.worker_poll_interval_seconds,
                 max_details_per_cycle=settings.worker_max_details_per_cycle,
                 details_recheck_seconds=settings.worker_details_recheck_seconds,
+                details_retry_seconds=settings.worker_details_retry_seconds,
                 job_stale_seconds=settings.worker_job_stale_seconds,
                 job_max_attempts=settings.worker_job_max_attempts,
                 model_name=settings.prediction_model_name,

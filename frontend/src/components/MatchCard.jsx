@@ -96,6 +96,17 @@ export default function MatchCard({ match }) {
         {match.format ? <span>{match.format}</span> : null}
       </div>
 
+      {match.draft?.picks?.length ? (
+        <div className="match-card__draft-picks" aria-label="Выбранные герои">
+          {match.draft.picks.map((pick, index) => (
+            <span className="match-card__draft-pick" key={`${pick.side}-${pick.hero_name}-${index}`}>
+              {pick.hero_image_url ? <img src={pick.hero_image_url} alt="" loading="lazy" /> : null}
+              <span>{pick.hero_name}</span>
+            </span>
+          ))}
+        </div>
+      ) : null}
+
       <div className="match-card__bottom">
         <div className="match-facts">
           <div>

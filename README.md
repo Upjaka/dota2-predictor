@@ -81,11 +81,11 @@ Run the frontend locally in PowerShell:
 cd frontend
 npm install
 $env:VITE_API_BASE_URL="http://localhost:8000"
-$env:VITE_POLL_INTERVAL_MS="30000"
+$env:VITE_POLL_INTERVAL_MS="5000"
 npm run dev
 ```
 
-In Docker Compose, the same values come from the root `.env` and default to `http://localhost:8000` and `30000` milliseconds. The API URL is used by JavaScript in the browser: **do not** set it to `http://api:8000`, because that Compose service name is not resolvable by the user's browser. For a remote deployment, set `VITE_API_BASE_URL` to a public/reachable API origin and add the exact frontend origin to the comma-separated `CORS_ORIGINS` allow-list (default `http://localhost:5173`). CORS middleware is already enabled in FastAPI.
+In Docker Compose, the same values come from the root `.env` and default to `http://localhost:8000` and `5000` milliseconds. Dashboard polling reads the backend only; the external OpenDota polling interval is configured separately. The API URL is used by JavaScript in the browser: **do not** set it to `http://api:8000`, because that Compose service name is not resolvable by the user's browser. For a remote deployment, set `VITE_API_BASE_URL` to a public/reachable API origin and add the exact frontend origin to the comma-separated `CORS_ORIGINS` allow-list (default `http://localhost:5173`). CORS middleware is already enabled in FastAPI.
 
 The dashboard polls at the configured interval, skips a poll while the previous refresh is still in flight, and shows the last successful refresh time. A map page polls its draft, prediction history, and prediction-job states on the same interval; requests are aborted and timers cleared when the page unmounts.
 
@@ -138,7 +138,7 @@ OpenDota's observed `/live` response may include `players` records representing 
 
 OpenDota configuration: `OPENDOTA_BASE_URL`, optional `OPENDOTA_API_KEY`, `OPENDOTA_TIMEOUT_SECONDS`, `OPENDOTA_MAX_RETRIES`, and `OPENDOTA_RETRY_BACKOFF_SECONDS`. The key is passed only as the documented `api_key` query parameter and is read from `.env`, never embedded in code. The client uses bounded timeouts, bounded retries for network/408/429/5xx failures, honors `Retry-After` where parseable, and does not retry other HTTP errors or invalid response bodies.
 
-Worker settings (all are read from environment variables): `WORKER_POLL_INTERVAL_SECONDS` (default `30`), `WORKER_MAX_DETAILS_PER_CYCLE` (default `10`), `WORKER_DETAILS_RECHECK_SECONDS` (default `3600`), `WORKER_JOB_STALE_SECONDS` (default `300`), and `WORKER_JOB_MAX_ATTEMPTS` (default `3`). The 30-second cycle refreshes live games frequently while keeping API calls bounded; OpenDota publishes no guaranteed request quota, so adjust the interval and per-cycle cap to the account's actual provider limits. `PREDICTION_MODEL_NAME` defaults to `default`.
+Worker settings (all are read from environment variables): `WORKER_POLL_INTERVAL_SECONDS` (default `30`), `WORKER_MAX_DETAILS_PER_CYCLE` (default `10`), `WORKER_DETAILS_RECHECK_SECONDS` (default `3600`), `WORKER_DETAILS_RETRY_SECONDS` (default `60`), `WORKER_JOB_STALE_SECONDS` (default `300`), and `WORKER_JOB_MAX_ATTEMPTS` (default `3`). Failed detail requests and maps whose full draft is not available yet are retried on the shorter interval; the per-cycle detail cap still bounds API load. The 30-second cycle refreshes live games frequently while keeping API calls bounded; OpenDota publishes no guaranteed request quota, so adjust the interval and per-cycle cap to the account's actual provider limits. `PREDICTION_MODEL_NAME` defaults to `default`.
 
 Official references: [OpenDota OpenAPI](https://api.opendota.com/api), [OpenDota API docs](https://docs.opendota.com/), [OpenDota API keys](https://www.opendota.com/api-keys), and [STRATZ GraphQL playground](https://api.stratz.com/graphiql).
 

@@ -1,5 +1,5 @@
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -597,6 +597,111 @@ async def test_live_draft_is_incremental_idempotent_and_queues_when_complete(
         assert game.radiant_won is True
 
 
+@pytest.mark.asyncio
+async def test_unresolved_hero_in_full_snapshot_does_not_erase_stored_picks(
+    sqlite_session_factory,
+):
+    worker = MatchMonitoringWorker(
+        provider=SimpleNamespace(provider_name="opendota"),
+        batru_client=object(),
+        poll_interval_seconds=30,
+        max_details_per_cycle=1,
+        details_recheck_seconds=3600,
+        job_stale_seconds=300,
+        job_max_attempts=3,
+        model_name="test",
+        session_factory=sqlite_session_factory,
+    )
+    async with sqlite_session_factory() as session:
+        session.add_all(
+            [
+                Hero(
+                    provider="opendota",
+                    external_hero_id=str(hero_id),
+                    name=f"Hero {hero_id}",
+                )
+                for hero_id in range(1, 11)
+            ]
+        )
+        await session.commit()
+
+    base = live_snapshot()
+    complete = ProviderDraft(
+        tuple(
+            ProviderDraftPick(
+                external_hero_id=str(hero_id),
+                side="radiant" if hero_id <= 5 else "dire",
+                pick_order=hero_id,
+            )
+            for hero_id in range(1, 11)
+        ),
+        pick_order_is_chronological=False,
+    )
+    await worker._upsert_snapshot(replace(base, map=replace(base.map, draft=complete)))
+
+    incomplete_resolution = ProviderDraft(
+        tuple(
+            ProviderDraftPick(
+                external_hero_id=str(hero_id if hero_id < 10 else 999),
+                side="radiant" if hero_id <= 5 else "dire",
+                pick_order=hero_id,
+            )
+            for hero_id in range(1, 11)
+        ),
+        pick_order_is_chronological=False,
+    )
+    await worker._upsert_snapshot(
+        replace(base, map=replace(base.map, draft=incomplete_resolution))
+    )
+
+    async with sqlite_session_factory() as session:
+        latest = await session.scalar(
+            select(Draft)
+            .options(selectinload(Draft.picks).joinedload(DraftPick.hero))
+            .order_by(Draft.version.desc())
+        )
+        assert latest is not None
+        assert len(latest.picks) == 10
+        assert {pick.hero.external_hero_id for pick in latest.picks} == {
+            str(hero_id) for hero_id in range(1, 11)
+        }
+
+
+@pytest.mark.asyncio
+async def test_failed_match_details_are_retried_on_short_error_interval(
+    sqlite_session_factory,
+):
+    provider = SimpleNamespace(
+        provider_name="opendota",
+        get_match_details=AsyncMock(side_effect=RuntimeError("not indexed yet")),
+    )
+    worker = MatchMonitoringWorker(
+        provider=provider,
+        batru_client=object(),
+        poll_interval_seconds=30,
+        max_details_per_cycle=1,
+        details_recheck_seconds=3600,
+        details_retry_seconds=60,
+        job_stale_seconds=300,
+        job_max_attempts=3,
+        model_name="test",
+        session_factory=sqlite_session_factory,
+    )
+    completed_snapshot = live_snapshot("completed")
+    await worker._upsert_snapshot(completed_snapshot)
+    async with sqlite_session_factory() as session:
+        game = await session.scalar(select(MatchGame))
+        assert game is not None
+        game.details_checked_at = datetime.now(timezone.utc) - timedelta(minutes=2)
+        game.details_error = "OpenDotaHTTPError: HTTP 404"
+        await session.commit()
+
+    await worker._refresh_due_match_details()
+    await worker._refresh_due_match_details()
+
+    assert provider.get_match_details.await_count == 1
+
+
 @pytest.mark.parametrize("map_status", ["unknown", "scheduled", "live", "completed"])
 @pytest.mark.asyncio
 async def test_prediction_job_is_created_only_after_full_canonical_draft(
@@ -1022,7 +1127,7 @@ async def test_corrected_side_assignment_recalculates_draft_completion(
 
 
 @pytest.mark.asyncio
-async def test_full_snapshot_with_unknown_hero_excludes_it_from_completion(
+async def test_full_snapshot_with_unknown_hero_preserves_complete_stored_draft(
     sqlite_session_factory,
 ):
     worker = MatchMonitoringWorker(
@@ -1087,11 +1192,11 @@ async def test_full_snapshot_with_unknown_hero_excludes_it_from_completion(
             .order_by(Draft.version.desc())
         )
         assert latest is not None
-        assert latest.completed_at is None
-        assert len(latest.picks) == 9
+        assert latest.completed_at is not None
+        assert len(latest.picks) == 10
         jobs = list((await session.scalars(select(PredictionJob))).all())
         assert len(jobs) == 1
-        assert jobs[0].draft_id != latest.id
+        assert jobs[0].draft_id == latest.id
 
 
 @pytest.mark.asyncio

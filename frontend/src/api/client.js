@@ -6,7 +6,7 @@ const configuredPollInterval = Number(import.meta.env.VITE_POLL_INTERVAL_MS);
 export const POLL_INTERVAL_MS =
   Number.isFinite(configuredPollInterval) && configuredPollInterval >= 5000
     ? configuredPollInterval
-    : 30000;
+    : 5000;
 
 async function request(path, { signal, ...options } = {}) {
   let response;

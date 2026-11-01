@@ -154,6 +154,14 @@ async def get_dashboard(
                         pick_count=len(draft.picks),
                         is_complete=is_draft_complete(draft.picks),
                         pick_order_is_chronological=draft.pick_order_is_chronological,
+                        picks=[
+                            {
+                                "hero_name": pick.hero.name,
+                                "hero_image_url": pick.hero.image_url,
+                                "side": pick.side,
+                            }
+                            for pick in sorted(draft.picks, key=lambda item: item.pick_order)
+                        ],
                     )
                     if draft
                     else None

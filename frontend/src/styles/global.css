@@ -593,6 +593,31 @@ p {
   content: "·";
 }
 
+.match-card__draft-picks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 0 12px 38px;
+}
+
+.match-card__draft-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.match-card__draft-pick img {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
 .match-card__bottom {
   align-items: flex-end;
   padding-top: 14px;
@@ -1375,6 +1400,10 @@ p {
   }
 
   .match-card__meta {
+    padding-left: 0;
+  }
+
+  .match-card__draft-picks {
     padding-left: 0;
   }
 

@@ -22,7 +22,10 @@ describe("MatchList", () => {
                 completed_at: null,
                 is_complete: true,
                 pick_order_is_chronological: false,
-                picks: Array.from({ length: 10 }, () => ({})),
+                picks: [
+                  { hero_name: "Axe", hero_image_url: null, side: "radiant" },
+                  { hero_name: "Puck", hero_image_url: null, side: "dire" },
+                ],
               },
               forecastState: "calculating",
             },
@@ -34,6 +37,8 @@ describe("MatchList", () => {
     expect(screen.getByText("Radiant Club")).toBeInTheDocument();
     expect(screen.getByText("Dire Club")).toBeInTheDocument();
     expect(screen.getByText("Autumn Cup")).toBeInTheDocument();
+    expect(screen.getByText("Axe")).toBeInTheDocument();
+    expect(screen.getByText("Puck")).toBeInTheDocument();
     expect(screen.getByText("#2")).toBeInTheDocument();
     expect(
       screen.getByText("Драфт завершён"),

@@ -510,8 +510,12 @@ async def test_dashboard_returns_compact_current_map_draft_and_prediction_state(
         SimpleNamespace(
             hero_id=uuid4(),
             side="radiant" if index < 5 else "dire",
+            pick_order=index,
             hero=SimpleNamespace(
-                provider="opendota", external_hero_id=f"hero-{index}"
+                provider="opendota",
+                external_hero_id=f"hero-{index}",
+                name=f"Hero {index}",
+                image_url=None,
             ),
         )
         for index in range(10)
@@ -564,6 +568,14 @@ async def test_dashboard_returns_compact_current_map_draft_and_prediction_state(
         "pick_count": 10,
         "is_complete": True,
         "pick_order_is_chronological": False,
+        "picks": [
+            {
+                "hero_name": f"Hero {index}",
+                "hero_image_url": None,
+                "side": "radiant" if index < 5 else "dire",
+            }
+            for index in range(10)
+        ],
     }
     assert item["has_prediction"] is True
     assert item["prediction_job_status"] == "succeeded"

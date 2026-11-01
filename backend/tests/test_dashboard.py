@@ -7,6 +7,7 @@ from decimal import Decimal
 
 from app.models import Draft, DraftPick, Hero, Match, MatchGame, Prediction, PredictionJob, Team
 from app.repositories.matches import MatchRepository
+from app.repositories.matches import _select_current_game
 
 
 async def test_dashboard_database_query_count_does_not_grow_with_page_size(
@@ -182,3 +183,18 @@ async def test_dashboard_selects_live_game_and_only_its_latest_draft(
     assert drafts_by_game[live_game_id].version == 2
     assert latest_draft_id not in draft_ids_with_predictions
     assert latest_jobs[latest_draft_id].status == "running"
+
+
+def test_dashboard_prefers_newest_live_game_when_previous_map_is_stale():
+    older_live_game = MatchGame(
+        game_number=1,
+        started_at=datetime(2026, 11, 1, 10, tzinfo=timezone.utc),
+        status="live",
+    )
+    current_live_game = MatchGame(
+        game_number=2,
+        started_at=datetime(2026, 11, 1, 11, tzinfo=timezone.utc),
+        status="live",
+    )
+
+    assert _select_current_game([older_live_game, current_live_game]) is current_live_game

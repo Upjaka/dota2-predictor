@@ -72,6 +72,13 @@ class DashboardDraftRead(BaseModel):
     pick_count: int
     is_complete: bool
     pick_order_is_chronological: bool
+    picks: list["DashboardDraftPickRead"]
+
+
+class DashboardDraftPickRead(BaseModel):
+    hero_name: str
+    hero_image_url: str | None
+    side: Literal["radiant", "dire"]
 
 
 class DashboardGameRead(BaseModel):

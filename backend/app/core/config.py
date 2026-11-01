@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     worker_poll_interval_seconds: float = Field(default=30.0, ge=10, le=86400)
     worker_max_details_per_cycle: int = Field(default=10, ge=1, le=100)
     worker_details_recheck_seconds: float = Field(default=3600.0, ge=60, le=604800)
+    worker_details_retry_seconds: float = Field(default=60.0, ge=10, le=3600)
     worker_job_stale_seconds: float = Field(default=300.0, ge=30, le=86400)
     worker_job_max_attempts: int = Field(default=3, ge=1, le=10)
     prediction_model_name: str = Field(default="default", min_length=1, max_length=100)

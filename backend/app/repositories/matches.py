@@ -251,7 +251,15 @@ class MatchRepository:
 def _select_current_game(games: list[MatchGame]) -> MatchGame:
     live_games = [game for game in games if game.status == "live"]
     if live_games:
-        return live_games[0]
+        # A previous map can remain marked live until OpenDota publishes its
+        # completed record. Prefer the newest live map in the series.
+        return max(
+            live_games,
+            key=lambda game: (
+                _datetime_timestamp(game.started_at),
+                game.game_number,
+            ),
+        )
     return max(
         games,
         key=lambda game: (

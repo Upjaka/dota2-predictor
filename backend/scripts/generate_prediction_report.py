@@ -20,8 +20,10 @@ import re
 import sys
 
 from openpyxl import Workbook
+from openpyxl.chart import BarChart, Reference
 from openpyxl.formatting.rule import CellIsRule
 from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from sqlalchemy import select, text
 from sqlalchemy.engine import URL
@@ -168,6 +170,84 @@ def _team_stats(evaluations: list[Evaluation]) -> list[tuple[str, str, int, int,
     ]
 
 
+CONFIDENCE_BANDS = (
+    ("50–55%", Decimal("0.50"), Decimal("0.55")),
+    ("55–58%", Decimal("0.55"), Decimal("0.58")),
+    ("58–60%", Decimal("0.58"), Decimal("0.60")),
+    ("60–65%", Decimal("0.60"), Decimal("0.65")),
+    ("65–70%", Decimal("0.65"), Decimal("0.70")),
+    ("70% и выше", Decimal("0.70"), None),
+)
+CONFIDENCE_THRESHOLDS = tuple(
+    Decimal(value) for value in ("0.50", "0.55", "0.58", "0.60", "0.65", "0.70")
+)
+
+
+def _confidence_band_index(confidence: Decimal) -> int | None:
+    for index, (_label, lower, upper) in enumerate(CONFIDENCE_BANDS):
+        if confidence >= lower and (upper is None or confidence < upper):
+            return index
+    return None
+
+
+def _scored_forecasts(evaluations: list[Evaluation]) -> list[tuple[Evaluation, Decimal, bool]]:
+    scored: list[tuple[Evaluation, Decimal, bool]] = []
+    for item in evaluations:
+        if not _valid(item):
+            continue
+        favorite, confidence, actual = _winner_and_confidence(item)
+        if favorite is not None and confidence is not None:
+            scored.append((item, confidence, favorite == actual))
+    return scored
+
+
+def _confidence_range_stats(evaluations: list[Evaluation]) -> list[dict[str, object]]:
+    """Return mutually exclusive confidence-band stats using unrounded Decimal values."""
+    scored = _scored_forecasts(evaluations)
+    result = []
+    for band_index, (label, _lower, _upper) in enumerate(CONFIDENCE_BANDS):
+        band = [
+            (item, confidence, correct)
+            for item, confidence, correct in scored
+            if _confidence_band_index(confidence) == band_index
+        ]
+        count = len(band)
+        correct_count = sum(correct for _, _, correct in band)
+        rate = Decimal(correct_count) / count if count else None
+        average = sum((confidence for _, confidence, _ in band), Decimal(0)) / count if count else None
+        result.append({
+            "band": label,
+            "count": count,
+            "correct": correct_count,
+            "incorrect": count - correct_count,
+            "win_rate": rate,
+            "average_confidence": average,
+            "deviation": rate - average if rate is not None and average is not None else None,
+        })
+    return result
+
+
+def _confidence_threshold_stats(evaluations: list[Evaluation]) -> list[dict[str, object]]:
+    """Return cumulative stats for forecasts strictly above each threshold."""
+    scored = _scored_forecasts(evaluations)
+    total = len(scored)
+    result = []
+    for threshold in CONFIDENCE_THRESHOLDS:
+        selected = [(item, confidence, correct) for item, confidence, correct in scored if confidence > threshold]
+        count = len(selected)
+        correct_count = sum(correct for _, _, correct in selected)
+        result.append({
+            "threshold": threshold,
+            "count": count,
+            "correct": correct_count,
+            "incorrect": count - correct_count,
+            "win_rate": Decimal(correct_count) / count if count else None,
+            "average_confidence": sum((confidence for _, confidence, _ in selected), Decimal(0)) / count if count else None,
+            "sample_share": Decimal(count) / total if total else None,
+        })
+    return result
+
+
 async def load_maps(tournament: str | None = None) -> list[MapRow]:
     """Load compact rows in a read-only PostgreSQL transaction (constant query count)."""
     database_url = _database_url()
@@ -273,83 +353,231 @@ def _safe_sheet_name(name: str, used: set[str]) -> str:
 HEADERS = ["Дата", "Турнир", "Матч / карта", "Match ID", "Radiant", "Dire", "Фаворит", "Уверенность", "Победитель", "Результат", "P(Radiant)", "P(Dire)", "Тип прогноза", "Модель", "Время прогноза", "Причина исключения", "Счёт"]
 
 
-def _write_sheet(workbook: Workbook, title: str, evaluations: list[Evaluation], *, overall: bool = False) -> None:
-    ws = workbook.create_sheet(title)
-    ws.append(["Сводная статистика по типам прогнозов", "Завершено карт", "Валидных", "Правильных", "Неправильных", "Точность"])
-    ws.append(["Всего завершённых карт", len({item.row.game_id for item in evaluations})])
-    kinds = sorted({item.kind for item in evaluations if item.kind} or {"Нет прогноза"})
-    for kind in kinds:
-        values = _stats([item for item in evaluations if item.kind == kind])
-        ws.append([kind, values["completed"], values["valid"], values["correct"], values["incorrect"], values["accuracy"]])
-        ws.cell(ws.max_row, 6).number_format = "0.00%"
-    if overall:
-        ws.append(["Учтённых турниров", len({item.row.tournament_id for item in evaluations if item.row.tournament_id})])
-    for cell in ws[1][:6]:
+def _write_confidence_tables(
+    ws,
+    evaluations: list[Evaluation],
+    kind: str,
+    start_row: int,
+    sheet_index: int,
+    type_index: int,
+) -> int:
+    """Write the two independent confidence analyses for one forecast type."""
+    bands = _confidence_range_stats(evaluations)
+    thresholds = _confidence_threshold_stats(evaluations)
+    left_col, right_col = 1, 10
+    ws.cell(start_row, left_col, f"Точность по диапазонам уверенности — {kind}")
+    ws.cell(start_row, right_col, f"Накопительная точность по порогам — {kind}")
+    for col in (left_col, right_col):
+        cell = ws.cell(start_row, col)
         cell.font = Font(bold=True, color="FFFFFF")
         cell.fill = PatternFill("solid", fgColor="1F4E78")
-    start = ws.max_row + 2
+
+    band_headers = ["Диапазон", "Прогнозов", "Правильных", "Неправильных", "Винрейт", "Средняя уверенность", "Отклонение, п.п."]
+    threshold_headers = ["Порог", "Прогнозов", "Правильных", "Неправильных", "Винрейт", "Средняя уверенность", "Доля выборки"]
+    header_row = start_row + 1
+    for offset, header in enumerate(band_headers):
+        ws.cell(header_row, left_col + offset, header)
+    for offset, header in enumerate(threshold_headers):
+        ws.cell(header_row, right_col + offset, header)
+
+    first_data_row = header_row + 1
+    for row_offset, values in enumerate(bands):
+        row = first_data_row + row_offset
+        ws.cell(row, left_col, values["band"])
+        for offset, key in enumerate(("count", "correct", "incorrect"), 1):
+            ws.cell(row, left_col + offset, values[key])
+        for offset, key in enumerate(("win_rate", "average_confidence", "deviation"), 4):
+            value = values[key]
+            cell = ws.cell(row, left_col + offset, float(value) if value is not None else None)
+            if key == "deviation":
+                cell.number_format = '+0.00% "п.п.";-0.00% "п.п.";0.00% "п.п."'
+            else:
+                cell.number_format = "0.00%"
+
+    for row_offset, values in enumerate(thresholds):
+        row = first_data_row + row_offset
+        ws.cell(row, right_col, f">{float(values['threshold']):.0%}")
+        for offset, key in enumerate(("count", "correct", "incorrect"), 1):
+            ws.cell(row, right_col + offset, values[key])
+        for offset, key in enumerate(("win_rate", "average_confidence", "sample_share"), 4):
+            value = values[key]
+            ws.cell(row, right_col + offset, float(value) if value is not None else None).number_format = "0.00%"
+
+    last_data_row = first_data_row + len(bands) - 1
+    table_specs = (
+        (f"ConfidenceBands{sheet_index}_{type_index}", f"A{header_row}:G{last_data_row}", "TableStyleMedium4"),
+        (f"ConfidenceThresholds{sheet_index}_{type_index}", f"J{header_row}:P{last_data_row}", "TableStyleMedium4"),
+    )
+    for name, ref, style in table_specs:
+        table = Table(displayName=name, ref=ref)
+        table.tableStyleInfo = TableStyleInfo(name=style, showRowStripes=True)
+        ws.add_table(table)
+    return last_data_row
+
+
+def _section_title(ws, row: int, title: str, end_col: int) -> None:
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=end_col)
+    cell = ws.cell(row, 1, title)
+    cell.font = Font(bold=True, color="FFFFFF", size=12)
+    cell.fill = PatternFill("solid", fgColor="1F4E78")
+    cell.alignment = Alignment(vertical="center")
+    ws.row_dimensions[row].height = 23
+
+
+def _write_sheet(workbook: Workbook, title: str, evaluations: list[Evaluation], *, overall: bool = False) -> None:
+    ws = workbook.create_sheet(title)
+    ws.sheet_view.showGridLines = False
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.autoPageBreaks = False
+
+    stats = _stats(evaluations)
+    scored = _scored_forecasts(evaluations)
+    avg_confidence = sum((confidence for _, confidence, _ in scored), Decimal(0)) / len(scored) if scored else None
+    tournament_count = len({item.row.tournament_id for item in evaluations if item.row.tournament_id})
+
+    _section_title(ws, 1, "DraftWatch · общая сводка" if overall else f"DraftWatch · {title}", 8)
+    cards = [
+        ("Валидных прогнозов", stats["valid"], "#,##0"),
+        ("Правильных", stats["correct"], "#,##0"),
+        ("Неправильных", stats["incorrect"], "#,##0"),
+        ("Точность", stats["accuracy"], "0.00%"),
+        ("Средняя уверенность", float(avg_confidence) if avg_confidence is not None else None, "0.00%"),
+        ("Турниров", tournament_count if overall else 1, "#,##0"),
+    ]
+    for index, (label, value, number_format) in enumerate(cards):
+        col = index * 2 + 1
+        ws.merge_cells(start_row=2, start_column=col, end_row=2, end_column=col + 1)
+        ws.merge_cells(start_row=3, start_column=col, end_row=3, end_column=col + 1)
+        label_cell = ws.cell(2, col, label)
+        value_cell = ws.cell(3, col, value)
+        label_cell.font = Font(color="44546A", bold=True, size=10)
+        label_cell.fill = PatternFill("solid", fgColor="D9E2F3")
+        value_cell.font = Font(color="1F1F1F", bold=True, size=16)
+        value_cell.fill = PatternFill("solid", fgColor="F2F6FC")
+        value_cell.number_format = number_format
+        label_cell.alignment = value_cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    ws.row_dimensions[2].height = 28
+    ws.row_dimensions[3].height = 32
+
+    kinds = sorted({item.kind for item in evaluations if item.kind} or {"Нет прогноза"})
+    _section_title(ws, 5, "Сводка по типам прогнозов", 6)
+    summary_headers = ["Тип прогноза", "Завершено карт", "Валидных", "Правильных", "Неправильных", "Точность"]
+    for col, header in enumerate(summary_headers, 1):
+        cell = ws.cell(6, col, header)
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="5B7FA3")
+    for row_index, kind in enumerate(kinds, 7):
+        values = _stats([item for item in evaluations if item.kind == kind])
+        row_values = [kind, values["completed"], values["valid"], values["correct"], values["incorrect"], values["accuracy"]]
+        for col, value in enumerate(row_values, 1):
+            ws.cell(row_index, col, value)
+        ws.cell(row_index, 6).number_format = "0.00%"
+
+    cursor = 7 + len(kinds) + 1
+    confidence_last = cursor
+    table_type_index = 0
+    for kind in sorted({item.kind for item in evaluations if item.kind}):
+        type_evaluations = [item for item in evaluations if item.kind == kind]
+        if not _scored_forecasts(type_evaluations):
+            continue
+        table_type_index += 1
+        _section_title(ws, cursor, f"Качество по уверенности · {kind}", 16)
+        confidence_last = _write_confidence_tables(ws, type_evaluations, kind, cursor + 1, len(workbook.worksheets), table_type_index)
+        cursor = confidence_last + 2
+
+    # A chart makes the non-overlapping confidence bands easy to compare.
+    band_table = next((table for table in ws.tables.values() if table.displayName.startswith("ConfidenceBands")), None)
+    if band_table:
+        from openpyxl.utils.cell import range_boundaries
+        min_col, min_row, max_col, max_row = range_boundaries(band_table.ref)
+        chart = BarChart()
+        chart.type = "col"
+        chart.style = 10
+        chart.title = "Точность по диапазонам уверенности"
+        chart.y_axis.title = "Точность"
+        chart.y_axis.numFmt = "0%"
+        chart.y_axis.scaling.min = 0
+        chart.y_axis.scaling.max = 1
+        chart.x_axis.title = "Уверенность"
+        chart.add_data(Reference(ws, min_col=min_col + 4, min_row=min_row, max_row=max_row), titles_from_data=True)
+        chart.set_categories(Reference(ws, min_col=min_col, min_row=min_row + 1, max_row=max_row))
+        chart.height, chart.width = 7, 15
+        ws.add_chart(chart, f"A{cursor}")
+        cursor += 16
+
+    team_stats = _team_stats(evaluations)
+    if team_stats:
+        _section_title(ws, cursor, "Прогнозы в пользу команд", 6)
+        team_start = cursor + 1
+        for col, header in enumerate(["Тип прогноза", "Команда", "Прогнозов", "Правильных", "Неправильных", "Винрейт"], 1):
+            ws.cell(team_start, col, header)
+        for row_index, values in enumerate(team_stats, team_start + 1):
+            for col, value in enumerate(values, 1):
+                ws.cell(row_index, col, value)
+            ws.cell(row_index, 6).number_format = "0.00%"
+        end = team_start + len(team_stats)
+        table = Table(displayName=f"TeamStats{len(workbook.worksheets)}", ref=f"A{team_start}:F{end}")
+        table.tableStyleInfo = TableStyleInfo(name="TableStyleMedium4", showRowStripes=True)
+        ws.add_table(table)
+        cursor = end + 2
+
+    excluded = Counter((item.kind or "Не определён", item.reason) for item in evaluations if item.reason)
+    if excluded:
+        _section_title(ws, cursor, "Исключённые из расчёта точности", 3)
+        reason_start = cursor + 1
+        for col, header in enumerate(["Тип прогноза", "Причина", "Карт"], 1):
+            ws.cell(reason_start, col, header)
+        for row_index, ((kind, reason), count) in enumerate(sorted(excluded.items()), reason_start + 1):
+            ws.cell(row_index, 1, kind)
+            ws.cell(row_index, 2, reason)
+            ws.cell(row_index, 3, count)
+        end = reason_start + len(excluded)
+        table = Table(displayName=f"Exclusions{len(workbook.worksheets)}", ref=f"A{reason_start}:C{end}")
+        table.tableStyleInfo = TableStyleInfo(name="TableStyleMedium4", showRowStripes=True)
+        ws.add_table(table)
+        cursor = end + 2
+
+    start = cursor + 1
+    _section_title(ws, start, "История матчей и прогнозов", len(HEADERS))
+    table_start = start + 1
     for col, header in enumerate(HEADERS, 1):
-        ws.cell(start, col, header)
-    for index, item in enumerate(sorted(evaluations, key=lambda x: (x.row.started_at or datetime.min, x.row.game_number, x.row.game_id, x.kind or "")), start + 1):
+        ws.cell(table_start, col, header)
+    ordered = sorted(evaluations, key=lambda x: (x.row.started_at or datetime.min, x.row.game_number, x.row.game_id, x.kind or ""))
+    for row_index, item in enumerate(ordered, table_start + 1):
         row, forecast = item.row, item.forecast
         favorite, confidence, winner = _winner_and_confidence(item)
         result = ("Правильный" if favorite == winner else "Неправильный") if _valid(item) else None
-        ws.append([
+        values = [
             _excel_datetime(row.started_at), row.tournament, f"{row.series_id} — карта {row.game_number}",
             row.external_id or row.game_id, row.radiant_team, row.dire_team, favorite,
             float(confidence) if confidence is not None else None, winner, result,
             float(forecast.radiant) if forecast else None, float(forecast.dire) if forecast else None,
             item.kind, forecast.model if forecast else None, _excel_datetime(forecast.calculated_at) if forecast else None,
             item.reason, f"{row.radiant_score} : {row.dire_score}" if row.radiant_score is not None and row.dire_score is not None else None,
-        ])
-    last = start + len(evaluations)
-    if evaluations:
-        ref = f"A{start}:Q{last}"
-        table = Table(displayName=f"MatchHistory{len(workbook.worksheets)}", ref=ref)
+        ]
+        for col, value in enumerate(values, 1):
+            ws.cell(row_index, col, value)
+        ws.cell(row_index, 1).number_format = ws.cell(row_index, 15).number_format = "yyyy-mm-dd hh:mm"
+        for col in (8, 11, 12):
+            ws.cell(row_index, col).number_format = "0.00%"
+    if ordered:
+        last = table_start + len(ordered)
+        table = Table(displayName=f"MatchHistory{len(workbook.worksheets)}", ref=f"A{table_start}:Q{last}")
         table.tableStyleInfo = TableStyleInfo(name="TableStyleMedium2", showRowStripes=True, showColumnStripes=False)
         ws.add_table(table)
-        # Excel Tables own their AutoFilter in table*.xml. A second worksheet
-        # AutoFilter over the same range makes Excel repair and discard tables.
-        ws.freeze_panes = f"A{start+1}"
-        ws.conditional_formatting.add(f"J{start+1}:J{last}", CellIsRule(operator="equal", formula=['"Правильный"'], fill=PatternFill("solid", fgColor="C6EFCE")))
-        ws.conditional_formatting.add(f"J{start+1}:J{last}", CellIsRule(operator="equal", formula=['"Неправильный"'], fill=PatternFill("solid", fgColor="FFC7CE")))
-        for r in range(start + 1, last + 1):
-            ws.cell(r, 1).number_format = "yyyy-mm-dd hh:mm"
-            ws.cell(r, 15).number_format = "yyyy-mm-dd hh:mm"
-            for c in (8, 11, 12):
-                ws.cell(r, c).number_format = "0.00%"
-    team_start = 2
-    team_col = 19
-    ws.cell(1, team_col, "Статистика прогнозов по командам")
-    ws.cell(1, team_col).font = Font(bold=True, color="FFFFFF")
-    ws.cell(1, team_col).fill = PatternFill("solid", fgColor="1F4E78")
-    for col, header in enumerate(["Тип прогноза", "Команда", "Предиктов", "Правильных", "Неправильных", "Винрейт"], team_col):
-        ws.cell(team_start, col, header)
-    for offset, values in enumerate(_team_stats(evaluations), team_start + 1):
-        for col, value in enumerate(values, team_col):
-            ws.cell(offset, col, value)
-        ws.cell(offset, team_col + 5).number_format = "0.00%"
-    if _team_stats(evaluations):
-        end = team_start + len(_team_stats(evaluations))
-        table = Table(displayName=f"TeamStats{len(workbook.worksheets)}", ref=f"S{team_start}:X{end}")
-        table.tableStyleInfo = TableStyleInfo(name="TableStyleMedium4", showRowStripes=True)
-        ws.add_table(table)
-    excluded = Counter((item.kind or "Не определён", item.reason) for item in evaluations if item.reason)
-    reason_row = max(last + 3, 12)
-    ws.cell(reason_row, 1, "Исключённые из точности по типам")
-    ws.cell(reason_row, 1).font = Font(bold=True)
-    for col, header in enumerate(["Тип прогноза", "Причина", "Карт"], 1):
-        ws.cell(reason_row + 1, col, header)
-    for offset, ((kind, reason), count) in enumerate(sorted(excluded.items()), reason_row + 2):
-        ws.cell(offset, 1, kind)
-        ws.cell(offset, 2, reason)
-        ws.cell(offset, 3, count)
-    widths = {1: 19, 2: 28, 3: 25, 4: 22, 5: 22, 6: 22, 7: 22, 8: 15, 9: 22, 10: 17, 11: 14, 12: 14, 13: 20, 14: 18, 15: 20, 16: 42, 17: 12, 19: 20, 20: 28, 21: 14, 22: 16, 23: 18, 24: 14}
+        ws.conditional_formatting.add(f"J{table_start+1}:J{last}", CellIsRule(operator="equal", formula=['"Правильный"'], fill=PatternFill("solid", fgColor="C6EFCE")))
+        ws.conditional_formatting.add(f"J{table_start+1}:J{last}", CellIsRule(operator="equal", formula=['"Неправильный"'], fill=PatternFill("solid", fgColor="FFC7CE")))
+
+    widths = {1: 24, 2: 32, 3: 29, 4: 24, 5: 22, 6: 22, 7: 23, 8: 15, 9: 23, 10: 18, 11: 15, 12: 15, 13: 22, 14: 24, 15: 22, 16: 38, 17: 14}
     for column, width in widths.items():
-        ws.column_dimensions[ws.cell(1, column).column_letter].width = width
+        ws.column_dimensions[get_column_letter(column)].width = width
     for row in ws.iter_rows():
         for cell in row:
-            cell.alignment = Alignment(vertical="top", wrap_text=cell.column in (2, 7, 9, 13, 16, 19))
+            if cell.alignment == Alignment():
+                cell.alignment = Alignment(vertical="top", wrap_text=cell.column in (2, 3, 5, 6, 7, 9, 13, 14, 16))
 
 
 def _excel_datetime(value: datetime | None) -> datetime | None:

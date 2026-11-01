@@ -109,6 +109,7 @@ describe("MatchList", () => {
                 winner_team_name: "Radiant Club",
                 radiant_score: 30,
                 dire_score: 21,
+                duration_seconds: 1821,
               },
             },
           ]}
@@ -117,7 +118,7 @@ describe("MatchList", () => {
     );
 
     expect(
-      screen.getByText("Победитель карты #2: Radiant Club · 30:21"),
+      screen.getByText("Победитель карты #2: Radiant Club · 30 мин"),
     ).toBeInTheDocument();
     expect(screen.getByText("Radiant Club").closest(".match-card__team")).toHaveClass(
       "match-card__team--winner",

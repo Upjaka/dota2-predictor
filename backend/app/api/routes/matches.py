@@ -137,6 +137,7 @@ async def get_dashboard(
                         game_number=serialized_game.game_number,
                         started_at=serialized_game.started_at,
                         status=serialized_game.status,
+                        duration_seconds=serialized_game.duration_seconds,
                         radiant_score=serialized_game.radiant_score,
                         dire_score=serialized_game.dire_score,
                         winner_side=serialized_game.winner_side,

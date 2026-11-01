@@ -79,6 +79,7 @@ class DashboardGameRead(BaseModel):
     game_number: int
     started_at: datetime | None
     status: str
+    duration_seconds: int | None
     radiant_score: int | None
     dire_score: int | None
     winner_side: Literal["radiant", "dire", "unknown"] = "unknown"

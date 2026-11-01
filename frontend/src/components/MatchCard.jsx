@@ -85,8 +85,8 @@ export default function MatchCard({ match }) {
           game.winner_team_name
             ? `Победитель карты #${game.game_number}: ${game.winner_team_name}`
             : `Результат карты #${game.game_number} недоступен`}
-          {game.radiant_score != null && game.dire_score != null
-            ? ` · ${game.radiant_score}:${game.dire_score}`
+          {game.duration_seconds != null
+            ? ` · ${Math.floor(game.duration_seconds / 60)} мин`
             : ""}
         </div>
       ) : null}

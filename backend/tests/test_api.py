@@ -485,6 +485,7 @@ async def test_dashboard_returns_compact_current_map_draft_and_prediction_state(
         provider="opendota",
         external_game_id="map-2",
         status="completed",
+        duration_seconds=1821,
         radiant_won=True,
         radiant_score=30,
         dire_score=20,
@@ -557,6 +558,7 @@ async def test_dashboard_returns_compact_current_map_draft_and_prediction_state(
     assert item["current_game"]["id"] == str(game_id)
     assert item["current_game"]["winner_side"] == "radiant"
     assert item["current_game"]["winner_team_name"] == "Radiant"
+    assert item["current_game"]["duration_seconds"] == 1821
     assert item["draft"] == {
         "version": 3,
         "pick_count": 10,
